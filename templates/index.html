@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>画像検索</title>
+    <title>Image Analysis</title>
 
     <style>
     :root{
@@ -366,8 +367,10 @@
 
     <div class="topbar">
         <div class="brand">
-            <h1>画像検索アプリ 📸</h1>
+            <h1>画像検索アプリ</h1>
+            <h3>Image Search App</h3>
             <p>類似度しきい値でフィルタ、クリックでポップアップ表示</p>
+            <p>Filter by similarity threshold, click to display popup</p>
         </div>
         <div class="actions">
             <button class="btn" type="button" onclick="toggleTheme()">
@@ -383,7 +386,9 @@
             <div class="hd">
                 <div class="title">
                     <b>検索設定</b>
+                    <b>Search Settings</b>
                     <span>基準画像と検索フォルダを選ぶ</span>
+                    <span>Select the reference image and search folder</span>
                 </div>
             </div>
             <div class="bd">
@@ -396,16 +401,19 @@
 
                     <div class="field">
                         <label>基準画像（未選択なら前回のまま）</label>
+                        <label>Reference image (if not selected, defaults to the previous one)</label>
                         <input type="file" name="base" accept="image/*">
                     </div>
 
                     <div class="field">
                         <label>検索フォルダ（複数選択）</label>
+                        <label>Search folder (multiple selection allowed)</label>
                         <input type="file" name="folder" accept="image/*" multiple required>
                     </div>
 
                     <div class="field">
                         <label>🎯 類似度しきい値</label>
+                        <label>Similarity Threshold</label>
                         <div class="slider">
                             <input type="range"
                                 name="threshold"
@@ -419,8 +427,8 @@
                                 oninput="syncThreshold(this.value, true)">
                         </div>
                         <div class="hint">
-                            <span>ゆるめ（結果多め）</span>
-                            <span>厳しめ（高精度）</span>
+                            <span>ゆるめ（結果多め）Looser</span>
+                            <span>厳しめ（高精度）Stricter</span>
                         </div>
 
                         <div class="pillbar">
@@ -428,12 +436,12 @@
                             <div class="pill" onclick="bumpThreshold(-0.10)">−0.10</div>
                             <div class="pill" onclick="bumpThreshold(+0.05)">＋0.05</div>
                             <div class="pill" onclick="bumpThreshold(+0.10)">＋0.10</div>
-                            <div class="pill" onclick="setThreshold(0.40)">おすすめ: 0.40</div>
-                            <div class="pill" onclick="setThreshold(0.70)">おすすめ: 0.70</div>
+                            <div class="pill" onclick="setThreshold(0.40)">おすすめ(Recomend): 0.40</div>
+                            <div class="pill" onclick="setThreshold(0.70)">おすすめ(Recomend): 0.70</div>
                         </div>
                     </div>
 
-                    <button class="primary" type="submit">検索開始 🚀</button>
+                    <button class="primary" type="submit">検索開始 </button>
                 </form>
             </div>
         </div>
@@ -527,27 +535,27 @@
                 </div>
                 <div class="modalSide">
                     <div class="kv">
-                        <b>スコア</b>
+                        <b>スコア(score)</b>
                         <span id="popup-score">-</span>
                     </div>
 
                     <div class="kv">
-                        <b>説明</b>
+                        <b>説明(explain)</b>
                         <span id="popup-text">
                             <span class="loading"><span class="dot"></span><span class="dot"></span><span class="dot"></span> 準備中</span>
                         </span>
                     </div>
 
                     <div class="kv">
-                        <b>内訳（100点換算）</b>
+                        <b>内訳(Breakdown)</b>
 
-                        <span>色</span>
+                        <span>色(color)</span>
                         <div class="bar"><div id="m-color"></div></div>
 
-                        <span>明るさ</span>
+                        <span>明るさ(Brightness)</span>
                         <div class="bar"><div id="m-bright"></div></div>
 
-                        <span>構造</span>
+                        <span>構造(Structure)</span>
                         <div class="bar"><div id="m-struct"></div></div>
 
                         <span>形（ORB）</span>
@@ -555,8 +563,8 @@
                     </div>
 
                     <div class="kv">
-                        <b>操作</b>
-                        <span>背景クリック or ✕ で閉じます</span>
+                        <b>操作(Operation)</b>
+                        <span>背景クリック or ✕ で閉じます(Click the background or ✕ to close.)</span>
                     </div>
                 </div>
             </div>
@@ -636,8 +644,8 @@
         img.src = "/static/uploads/" + name;
         title.textContent = "詳細: " + name;
 
-        sc.textContent = "分析中…";
-        text.innerHTML = '<span class="loading"><span class="dot"></span><span class="dot"></span><span class="dot"></span> 分析中…</span>';
+        sc.textContent = "分析中(Analyzing)…";
+        text.innerHTML = '<span class="loading"><span class="dot"></span><span class="dot"></span><span class="dot"></span> 分析中(Analyzing)…</span>';
 
         setBar("m-color", 0);
         setBar("m-bright", 0);
@@ -665,7 +673,7 @@
                 sc.textContent = "—";
             }
 
-            text.textContent = data.text || "説明が取得できませんでした。";
+            text.textContent = data.text || "説明が取得できませんでした。(The description could not be retrieved.)";
 
             if (data.metrics){
                 setBar("m-color", data.metrics.color);
