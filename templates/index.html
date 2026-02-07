@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>画像検索</title>
+
+    <style>
+    :root{
+        --bg:#0b1020;
+        --card:#111a33;
+        --card2:#0f1730;
+        --text:#e8ecff;
+        --muted:#a8b0d6;
+        --line:#23305a;
+        --accent:#7aa2ff;
+        --accent2:#6ee7ff;
+        --danger:#ff6b6b;
+        --shadow: 0 18px 50px rgba(0,0,0,.35);
+        --radius: 18px;
+        --radius2: 14px;
+        --pad: 18px;
+    }
+    [data-theme="light"]{
+        --bg:#f6f7ff;
+        --card:#ffffff;
+        --card2:#ffffff;
+        --text:#121528;
+        --muted:#5a648a;
+        --line:#e4e7ff;
+        --accent:#375bff;
+        --accent2:#00a5c7;
+        --danger:#d64545;
+        --shadow: 0 18px 50px rgba(16,21,40,.12);
+    }
+
+    *{ box-sizing:border-box; }
+    body{
+        margin:0;
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans JP", sans-serif;
+        background: radial-gradient(1200px 900px at 20% 0%, rgba(122,162,255,.18), transparent 55%),
+                    radial-gradient(1000px 700px at 90% 10%, rgba(110,231,255,.14), transparent 60%),
+                    var(--bg);
+        color:var(--text);
+    }
+    a{ color:inherit; }
+    .wrap{ max-width:1100px; margin:0 auto; padding: 26px 16px 60px; }
+
+    /* Header */
+    .topbar{
+        display:flex; align-items:center; justify-content:space-between;
+        gap:12px; margin-bottom: 18px;
+    }
+    .brand{
+        display:flex; flex-direction:column; gap:4px;
+    }
+    .brand h1{
+        margin:0; font-size: 22px; letter-spacing:.2px;
+    }
+    .brand p{
+        margin:0; color:var(--muted); font-size: 13px;
+    }
+    .actions{ display:flex; gap:10px; align-items:center; }
+    .btn{
+        border:1px solid var(--line);
+        background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,0));
+        color:var(--text);
+        padding:10px 12px;
+        border-radius: 12px;
+        cursor:pointer;
+        transition: .15s;
+        box-shadow: 0 10px 24px rgba(0,0,0,.14);
+        display:inline-flex; align-items:center; gap:8px;
+        user-select:none;
+    }
+    [data-theme="light"] .btn{ box-shadow: 0 10px 24px rgba(16,21,40,.10); }
+    .btn:hover{ transform: translateY(-1px); border-color: rgba(122,162,255,.5); }
+    .btn:active{ transform: translateY(0px); }
+
+    /* Layout */
+    .grid{
+        display:grid;
+        grid-template-columns: 380px 1fr;
+        gap: 16px;
+        align-items:start;
+    }
+    @media (max-width: 980px){
+        .grid{ grid-template-columns: 1fr; }
+    }
+
+    .card{
+        background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,0));
+        border:1px solid var(--line);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        overflow:hidden;
+    }
+    .card .hd{
+        padding: 16px 18px;
+        background: rgba(0,0,0,.10);
+        border-bottom:1px solid var(--line);
+        display:flex; align-items:center; justify-content:space-between; gap:12px;
+    }
+    [data-theme="light"] .card .hd{ background: rgba(55,91,255,.05); }
+    .card .hd .title{
+        display:flex; flex-direction:column; gap:4px;
+    }
+    .card .hd .title b{ font-size:14px; }
+    .card .hd .title span{ font-size:12px; color:var(--muted); }
+    .card .bd{ padding: 16px 18px; }
+
+    .error{
+        padding: 10px 12px;
+        border-radius: 12px;
+        background: rgba(255,107,107,.14);
+        border:1px solid rgba(255,107,107,.35);
+        color: var(--text);
+        margin-bottom: 12px;
+        font-size: 13px;
+    }
+
+    /* Form */
+    label{ font-size: 13px; color: var(--muted); display:block; margin-bottom:8px; }
+    .field{ margin-bottom: 14px; }
+    input[type="file"]{
+        width:100%;
+        padding: 12px;
+        border-radius: 14px;
+        border:1px solid var(--line);
+        background: rgba(0,0,0,.12);
+        color: var(--text);
+    }
+    [data-theme="light"] input[type="file"]{ background: rgba(16,21,40,.03); }
+
+    .row{
+        display:flex; gap:10px; align-items:center;
+    }
+    .row > *{ flex:1; }
+
+    .slider{
+        display:flex; align-items:center; gap:10px;
+        padding: 10px 12px;
+        border:1px solid var(--line);
+        border-radius: 14px;
+        background: rgba(0,0,0,.12);
+    }
+    [data-theme="light"] .slider{ background: rgba(16,21,40,.03); }
+    input[type="range"]{ width:100%; }
+    input[type="number"]{
+        width: 90px;
+        padding: 10px 10px;
+        border-radius: 12px;
+        border:1px solid var(--line);
+        background: rgba(0,0,0,.10);
+        color: var(--text);
+    }
+    [data-theme="light"] input[type="number"]{ background: rgba(16,21,40,.02); }
+
+    .hint{
+        margin-top: 8px; font-size: 12px; color: var(--muted);
+        display:flex; justify-content:space-between;
+    }
+    .pillbar{ display:flex; gap:8px; margin-top: 10px; flex-wrap:wrap; }
+    .pill{
+        padding: 8px 10px;
+        border:1px solid var(--line);
+        border-radius: 999px;
+        font-size: 12px;
+        color: var(--muted);
+        background: rgba(0,0,0,.10);
+        cursor:pointer;
+        transition:.15s;
+    }
+    [data-theme="light"] .pill{ background: rgba(16,21,40,.02); }
+    .pill:hover{ border-color: rgba(122,162,255,.45); color: var(--text); }
+
+    .primary{
+        width:100%;
+        margin-top: 12px;
+        padding: 12px 14px;
+        border-radius: 14px;
+        border: 1px solid rgba(122,162,255,.65);
+        background: linear-gradient(135deg, rgba(122,162,255,.95), rgba(110,231,255,.75));
+        color: #08102b;
+        font-weight: 800;
+        cursor:pointer;
+        transition:.15s;
+    }
+    .primary:hover{ transform: translateY(-1px); filter: brightness(1.03); }
+    .primary:active{ transform: translateY(0); }
+
+    /* Results */
+    .subgrid{
+        display:flex; flex-direction:column; gap: 16px;
+    }
+    .baseBox{
+        display:flex; gap: 12px; align-items:center;
+    }
+    .baseBox img{
+        width: 120px; height: 120px; object-fit: cover;
+        border-radius: 16px;
+        border:1px solid var(--line);
+        background: rgba(0,0,0,.10);
+    }
+    .baseMeta{ display:flex; flex-direction:column; gap:6px; }
+    .baseMeta b{ font-size:14px; }
+    .baseMeta span{ font-size:12px; color: var(--muted); }
+
+    .resultsGrid{
+        display:grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+    }
+    @media (max-width: 980px){ .resultsGrid{ grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 560px){ .resultsGrid{ grid-template-columns: 1fr; } }
+
+    .item{
+        border:1px solid var(--line);
+        border-radius: var(--radius2);
+        background: rgba(0,0,0,.10);
+        overflow:hidden;
+        cursor:pointer;
+        transition:.15s;
+        display:flex; flex-direction:column;
+        min-height: 250px;
+    }
+    [data-theme="light"] .item{ background: rgba(16,21,40,.02); }
+    .item:hover{ transform: translateY(-2px); border-color: rgba(122,162,255,.45); }
+    .thumb{
+        aspect-ratio: 4 / 3;
+        width:100%;
+        object-fit: cover;
+        background: rgba(0,0,0,.08);
+    }
+    .meta{ padding: 12px 12px 14px; display:flex; flex-direction:column; gap:10px; }
+    .scoreLine{ display:flex; justify-content:space-between; align-items:center; gap:8px; }
+    .scoreLine b{ font-size:13px; }
+    .scoreLine span{ font-size:12px; color: var(--muted); }
+
+    .bar{
+        height: 10px;
+        border-radius: 999px;
+        background: rgba(255,255,255,.08);
+        border:1px solid var(--line);
+        overflow:hidden;
+    }
+    .bar > div{
+        height:100%;
+        width:0%;
+        background: linear-gradient(90deg, rgba(110,231,255,.9), rgba(122,162,255,.95));
+    }
+    .desc{
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.45;
+        min-height: 34px;
+    }
+
+    .empty{
+        padding: 18px;
+        border-radius: var(--radius);
+        border:1px dashed var(--line);
+        color: var(--muted);
+        background: rgba(0,0,0,.08);
+    }
+    [data-theme="light"] .empty{ background: rgba(16,21,40,.02); }
+
+    /* Popup */
+    #popup{
+        display:none;
+        position:fixed;
+        inset:0;
+        background: rgba(0,0,0,.75);
+        z-index: 9999;
+        align-items:center;
+        justify-content:center;
+        padding: 20px;
+    }
+    .modal{
+        width:min(980px, 100%);
+        border-radius: 20px;
+        border:1px solid rgba(255,255,255,.12);
+        background: var(--card);
+        box-shadow: 0 30px 90px rgba(0,0,0,.55);
+        overflow:hidden;
+    }
+    [data-theme="light"] .modal{
+        border-color: var(--line);
+        box-shadow: 0 30px 90px rgba(16,21,40,.25);
+    }
+    .modalHd{
+        padding: 12px 14px;
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        border-bottom:1px solid var(--line);
+        background: rgba(0,0,0,.10);
+    }
+    [data-theme="light"] .modalHd{ background: rgba(55,91,255,.05); }
+    .modalHd b{ font-size: 13px; }
+    .x{
+        border:1px solid var(--line);
+        background: rgba(255,255,255,.06);
+        color: var(--text);
+        width: 36px; height: 36px;
+        border-radius: 12px;
+        cursor:pointer;
+        display:grid; place-items:center;
+        transition:.15s;
+    }
+    .x:hover{ transform: translateY(-1px); border-color: rgba(122,162,255,.45); }
+    .modalBd{
+        display:grid;
+        grid-template-columns: 1fr 360px;
+        gap: 0;
+        min-height: 520px;
+    }
+    @media (max-width: 900px){
+        .modalBd{ grid-template-columns: 1fr; }
+    }
+    .modalImg{
+        background: rgba(0,0,0,.10);
+        display:flex; align-items:center; justify-content:center;
+        padding: 14px;
+        border-right:1px solid var(--line);
+    }
+    @media (max-width: 900px){
+        .modalImg{ border-right:none; border-bottom:1px solid var(--line); }
+    }
+    .modalImg img{
+        max-width:100%;
+        max-height: 520px;
+        border-radius: 16px;
+        border:1px solid var(--line);
+        background: rgba(0,0,0,.08);
+    }
+    .modalSide{
+        padding: 14px 14px 18px;
+        display:flex;
+        flex-direction:column;
+        gap: 12px;
+    }
+    .kv{
+        display:flex; flex-direction:column; gap:6px;
+        padding: 12px;
+        border-radius: 16px;
+        border:1px solid var(--line);
+        background: rgba(0,0,0,.08);
+    }
+    [data-theme="light"] .kv{ background: rgba(16,21,40,.02); }
+    .kv b{ font-size: 13px; }
+    .kv span{ font-size: 12px; color: var(--muted); line-height: 1.5; }
+    .loading{
+        display:inline-flex; gap:8px; align-items:center; color: var(--muted);
+        font-size: 12px;
+    }
+    .dot{ width:6px; height:6px; border-radius:99px; background: var(--muted); animation: blink 1s infinite; }
+    .dot:nth-child(2){ animation-delay: .15s; }
+    .dot:nth-child(3){ animation-delay: .3s; }
+    @keyframes blink{ 0%, 100%{ opacity:.2 } 50%{ opacity:1 } }
+  </style>
+</head>
+
+<body>
+<div class="wrap">
+
+    <div class="topbar">
+        <div class="brand">
+            <h1>画像検索アプリ 📸</h1>
+            <p>類似度しきい値でフィルタ、クリックでポップアップ表示</p>
+        </div>
+        <div class="actions">
+            <button class="btn" type="button" onclick="toggleTheme()">
+                <span>🌓</span><span id="themeLabel">Theme</span>
+            </button>
+        </div>
+    </div>
+
+    <div class="grid">
+
+        <!-- Left: Form -->
+        <div class="card">
+            <div class="hd">
+                <div class="title">
+                    <b>検索設定</b>
+                    <span>基準画像と検索フォルダを選ぶ</span>
+                </div>
+            </div>
+            <div class="bd">
+                {% if error %}
+                <div class="error">⚠️ {{ error }}</div>
+                {% endif %}
+
+                <form method="POST" enctype="multipart/form-data" id="searchForm">
+                    <input type="hidden" name="prev_base" value="{{ base }}">
+
+                    <div class="field">
+                        <label>基準画像（未選択なら前回のまま）</label>
+                        <input type="file" name="base" accept="image/*">
+                    </div>
+
+                    <div class="field">
+                        <label>検索フォルダ（複数選択）</label>
+                        <input type="file" name="folder" accept="image/*" multiple required>
+                    </div>
+
+                    <div class="field">
+                        <label>🎯 類似度しきい値</label>
+                        <div class="slider">
+                            <input type="range"
+                                name="threshold"
+                                min="0" max="1" step="0.01"
+                                value="{{ threshold | default(0.4) }}"
+                                oninput="syncThreshold(this.value)">
+                            <input type="number"
+                                id="thNum"
+                                min="0" max="1" step="0.01"
+                                value="{{ threshold | default(0.4) }}"
+                                oninput="syncThreshold(this.value, true)">
+                        </div>
+                        <div class="hint">
+                            <span>ゆるめ（結果多め）</span>
+                            <span>厳しめ（高精度）</span>
+                        </div>
+
+                        <div class="pillbar">
+                            <div class="pill" onclick="bumpThreshold(-0.05)">−0.05</div>
+                            <div class="pill" onclick="bumpThreshold(-0.10)">−0.10</div>
+                            <div class="pill" onclick="bumpThreshold(+0.05)">＋0.05</div>
+                            <div class="pill" onclick="bumpThreshold(+0.10)">＋0.10</div>
+                            <div class="pill" onclick="setThreshold(0.40)">おすすめ: 0.40</div>
+                            <div class="pill" onclick="setThreshold(0.70)">おすすめ: 0.70</div>
+                        </div>
+                    </div>
+
+                    <button class="primary" type="submit">検索開始 🚀</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Right: Results -->
+        <div class="subgrid">
+
+            <div class="card">
+                <div class="hd">
+                    <div class="title">
+                        <b>検索結果</b>
+                        <span>クリックで拡大 + 説明</span>
+                    </div>
+                </div>
+                <div class="bd">
+
+                    {% if base %}
+                    <div class="baseBox">
+                        <img src="/static/uploads/{{ base }}" alt="base">
+                        <div class="baseMeta">
+                            <b>基準画像</b>
+                            <span>基準画像は保持されます（再選択しなくてOK）</span>
+                            <span>しきい値: {{ "%.2f"|format(threshold | default(0.4)) }}</span>
+                        </div>
+                    </div>
+                    <div style="height:14px"></div>
+                        {% endif %}
+
+                        {% if results %}
+                        <div class="resultsGrid">
+                            {% for r in results %}
+                                {% set name = r[0] %}
+                                {% set score = r[1] %}
+                                {% set desc = (r[2] if (r|length > 2) else "") %}
+                                {% set bar = ((score + 1) / 2 if score < 0 else score) %}
+                                {% if bar < 0 %}{% set bar = 0 %}{% endif %}
+                                {% if bar > 1 %}{% set bar = 1 %}{% endif %}
+
+                                <div class="item"
+                                data-name="{{ name }}"
+                                data-score="{{ '%.6f'|format(score) }}"
+                                onclick="openPopupFromEl(this)"
+                                role="button" tabindex="0">
+                                    <img class="thumb" src="/static/uploads/{{ name }}" alt="result">
+                                    <div class="meta">
+                                        <div class="scoreLine">
+                                            <b>類似度</b>
+                                            <span>{{ "%.3f"|format(score) }}</span>
+                                        </div>
+                                        <div class="bar"><div style="width: {{ (bar*100)|round(0) }}%;"></div></div>
+
+                                            <div class="desc">
+                                                {% if desc %}
+                                                    {{ desc }}
+                                                {% else %}
+                                                    クリックすると「どこが似てそうか」を説明します
+                                                {% endif %}
+                                            </div>
+                                        </div>
+                                    </div>
+                            {% endfor %}
+                        </div>
+
+                        {% else %}
+                            <div class="empty">
+                                <b>まだ結果がありません</b><br>
+                                ① 基準画像を選ぶ → ② フォルダを選ぶ → ③ 検索開始。<br>
+                                もし0件なら、しきい値を少し下げてみてね（−0.05がおすすめ）。
+                            </div>
+                        {% endif %}
+
+                    </div>
+                </div>
+
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Popup -->
+    <div id="popup" onclick="closePopup(event)">
+        <div class="modal" onclick="event.stopPropagation()">
+            <div class="modalHd">
+                <b id="popup-title">詳細</b>
+                <button class="x" type="button" onclick="forceClose()">✕</button>
+            </div>
+
+            <div class="modalBd">
+                <div class="modalImg">
+                    <img id="popup-img" alt="popup">
+                </div>
+                <div class="modalSide">
+                    <div class="kv">
+                        <b>スコア</b>
+                        <span id="popup-score">-</span>
+                    </div>
+
+                    <div class="kv">
+                        <b>説明</b>
+                        <span id="popup-text">
+                            <span class="loading"><span class="dot"></span><span class="dot"></span><span class="dot"></span> 準備中</span>
+                        </span>
+                    </div>
+
+                    <div class="kv">
+                        <b>内訳（100点換算）</b>
+
+                        <span>色</span>
+                        <div class="bar"><div id="m-color"></div></div>
+
+                        <span>明るさ</span>
+                        <div class="bar"><div id="m-bright"></div></div>
+
+                        <span>構造</span>
+                        <div class="bar"><div id="m-struct"></div></div>
+
+                        <span>形（ORB）</span>
+                        <div class="bar"><div id="m-shape"></div></div>
+                    </div>
+
+                    <div class="kv">
+                        <b>操作</b>
+                        <span>背景クリック or ✕ で閉じます</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+<script>
+    // Theme
+    function applyTheme(theme){
+        document.documentElement.setAttribute("data-theme", theme);
+        localStorage.setItem("theme", theme);
+        document.getElementById("themeLabel").textContent = (theme === "light") ? "Light" : "Dark";
+    }
+    function toggleTheme(){
+        const cur = document.documentElement.getAttribute("data-theme") || "dark";
+        applyTheme(cur === "dark" ? "light" : "dark");
+    }
+    (function initTheme(){
+        const saved = localStorage.getItem("theme") || "dark";
+        applyTheme(saved);
+    })();
+
+    // Threshold sync
+    function clamp01(x){
+        x = Number(x);
+        if (isNaN(x)) return 0.4;
+        if (x < 0) return 0;
+        if (x > 1) return 1;
+        return Math.round(x * 100) / 100;
+    }
+    function syncThreshold(v, fromNum=false){
+        const val = clamp01(v);
+        const form = document.getElementById("searchForm");
+        const range = form.querySelector('input[type="range"][name="threshold"]');
+        const num = document.getElementById("thNum");
+        range.value = val;
+        num.value = val;
+    }
+    function bumpThreshold(delta){
+        const num = document.getElementById("thNum");
+        syncThreshold(clamp01(Number(num.value) + delta), true);
+    }
+    function setThreshold(v){
+        syncThreshold(v, true);
+    }
+
+    // Popup
+    function setBar(id, v){
+        const el = document.getElementById(id);
+        if (!el) return;
+        const pct = Math.max(0, Math.min(100, Number(v) || 0));
+        el.style.width = pct + "%";
+    }
+
+    function openPopupFromEl(el){
+        const name = el.dataset.name;
+        const score = Number(el.dataset.score);
+        openPopup(name, score);
+    }
+
+    async function openPopup(name, score){
+        const popup = document.getElementById("popup");
+        const img = document.getElementById("popup-img");
+        const title = document.getElementById("popup-title");
+        const sc = document.getElementById("popup-score");
+        const text = document.getElementById("popup-text");
+
+        const base = "{{ base }}";
+
+        if (!base){
+            sc.textContent = "—";
+            text.textContent = "基準画像が選ばれていません。まず検索を実行してね📸";
+            popup.style.display = "flex";
+            return;
+        }
+
+        img.src = "/static/uploads/" + name;
+        title.textContent = "詳細: " + name;
+
+        sc.textContent = "分析中…";
+        text.innerHTML = '<span class="loading"><span class="dot"></span><span class="dot"></span><span class="dot"></span> 分析中…</span>';
+
+        setBar("m-color", 0);
+        setBar("m-bright", 0);
+        setBar("m-struct", 0);
+        setBar("m-shape", 0);
+
+        popup.style.display = "flex";
+
+        try{
+            const res = await fetch("/analyze", {
+                method: "POST",
+                headers: {"Content-Type":"application/json"},
+                body: JSON.stringify({ base: base, target: name })
+            });
+
+            const data = await res.json();
+
+            if (data.overlay_url){
+                img.src = data.overlay_url;
+            }
+
+            if (data.score100 !== undefined){
+                sc.textContent = String(data.score100) + " / 100";
+            } else {
+                sc.textContent = "—";
+            }
+
+            text.textContent = data.text || "説明が取得できませんでした。";
+
+            if (data.metrics){
+                setBar("m-color", data.metrics.color);
+                setBar("m-bright", data.metrics.brightness);
+                setBar("m-struct", data.metrics.structure);
+                setBar("m-shape", data.metrics.shape);
+            }
+
+        }catch(e){
+            sc.textContent = "—";
+            text.textContent = "分析に失敗しました（/analyze を確認してね）。";
+            console.error(e);
+        }
+    }
+
+    function closePopup(e){
+        document.getElementById("popup").style.display = "none";
+    }
+    function forceClose(){
+        document.getElementById("popup").style.display = "none";
+        document.getElementById("popup-img").src = "";
+        document.getElementById("popup-score").textContent = "-";
+        document.getElementById("popup-text").textContent = "";
+        setBar("m-color", 0);
+        setBar("m-bright", 0);
+        setBar("m-struct", 0);
+        setBar("m-shape", 0);
+    }
+</script>
+
+</body>
+</html>
