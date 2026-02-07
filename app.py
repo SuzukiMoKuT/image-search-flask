@@ -4,6 +4,7 @@ import uuid
 import cv2
 import numpy as np
 from PIL import Image
+import gc
 
 # -----------------------------
 # App / Folders
@@ -28,47 +29,91 @@ def allowed_file(filename: str) -> bool:
 
 
 # -----------------------------
-# CLIP (lazy load / optional)
+# CLIP (on-demand / low-memory)
 # -----------------------------
-CLIP_AVAILABLE = False
+# 無料枠対策：デフォは「キャッシュしない」（毎回ロードして毎回解放）
+# 速くしたいなら Renderの環境変数で CLIP_CACHE=1 を設定
+CLIP_CACHE = os.getenv("CLIP_CACHE", "0") == "1"
+
 _clip_model = None
 _clip_preprocess = None
 _clip_device = "cpu"
+CLIP_AVAILABLE = None  # 未判定
 
-try:
+
+def _try_import_clip():
+    """起動時に重くしないため、必要になった時だけimportする"""
+    try:
+        import torch  # noqa
+        import clip   # noqa
+        return True
+    except Exception as e:
+        print("⚠️ CLIP関連のimportに失敗:", e)
+        return False
+
+
+def _load_clip():
+    """CLIPをロード（CPU固定、jit=Falseでメモリ軽め）"""
     import torch
-    import clip  # openai/CLIP
+    import clip
 
-    CLIP_AVAILABLE = True
-except Exception as e:
-    print("⚠️ CLIP関連のimportに失敗（RenderではCPU/依存関係に注意）:", e)
-    CLIP_AVAILABLE = False
+    # 無料枠のCPUリソース節約（スレッド数を絞る）
+    try:
+        torch.set_num_threads(1)
+    except Exception:
+        pass
 
-
-def get_clip_model():
-    """CLIPを必要な時だけロード（起動時の重さ・失敗リスクを下げる）"""
-    global _clip_model, _clip_preprocess, _clip_device
-    if not CLIP_AVAILABLE:
-        return None, None, "cpu"
-
-    if _clip_model is None or _clip_preprocess is None:
-        _clip_device = "cuda" if torch.cuda.is_available() else "cpu"
-        _clip_model, _clip_preprocess = clip.load("ViT-B/32", device=_clip_device)
-        _clip_model.eval()
-        print("✅ CLIP loaded on:", _clip_device)
-
-    return _clip_model, _clip_preprocess, _clip_device
+    device = "cpu"
+    model, preprocess = clip.load("ViT-B/32", device=device, jit=False)
+    model.eval()
+    return model, preprocess, device
 
 
 def get_clip_feature(image_path: str):
-    model, preprocess, device = get_clip_model()
-    if model is None:
-        raise RuntimeError("CLIP is not available")
+    """
+    CLIP特徴量を返す（0..1相当のcos類似に使う）
+    デフォルトではキャッシュせず毎回ロード→毎回解放（落ちにくさ優先）
+    """
+    global CLIP_AVAILABLE, _clip_model, _clip_preprocess, _clip_device
 
-    image = preprocess(Image.open(image_path)).unsqueeze(0).to(device)
-    with torch.no_grad():
-        feature = model.encode_image(image)
-    return feature / feature.norm(dim=-1, keepdim=True)
+    if CLIP_AVAILABLE is None:
+        CLIP_AVAILABLE = _try_import_clip()
+    if not CLIP_AVAILABLE:
+        raise RuntimeError("CLIP is not available (import failed)")
+
+    # キャッシュONなら、最初の1回だけロードして使い回す
+    if CLIP_CACHE:
+        if _clip_model is None or _clip_preprocess is None:
+            _clip_model, _clip_preprocess, _clip_device = _load_clip()
+
+        model = _clip_model
+        preprocess = _clip_preprocess
+        device = _clip_device
+
+        import torch
+        with torch.inference_mode():
+            img = preprocess(Image.open(image_path)).unsqueeze(0).to(device)
+            feat = model.encode_image(img)
+            feat = feat / feat.norm(dim=-1, keepdim=True)
+        return feat
+
+    # キャッシュOFF（デフォ）：毎回ロードして毎回解放
+    model, preprocess, device = _load_clip()
+    try:
+        import torch
+        with torch.inference_mode():
+            img = preprocess(Image.open(image_path)).unsqueeze(0).to(device)
+            feat = model.encode_image(img)
+            feat = feat / feat.norm(dim=-1, keepdim=True)
+        return feat
+    finally:
+        # 明示解放（無料枠で落ちにくくする）
+        try:
+            del model
+            del preprocess
+        except Exception:
+            pass
+        gc.collect()
 
 
 # -----------------------------
@@ -137,19 +182,15 @@ def make_overlay_with_bbox(base_path, target_path):
     if base is None or tgt is None:
         return None, None
 
-    # 同じサイズへ（target基準）
     h, w = tgt.shape[:2]
     base_rs = cv2.resize(base, (w, h))
 
-    # 差分ヒート（簡易）
     diff = cv2.absdiff(base_rs, tgt)
     gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (9, 9), 0)
 
-    # しきい値で「差が大きい部分」を抽出
     _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-    # ノイズ除去
     kernel = np.ones((7, 7), np.uint8)
     th = cv2.morphologyEx(th, cv2.MORPH_OPEN, kernel, iterations=1)
     th = cv2.dilate(th, kernel, iterations=1)
@@ -187,7 +228,7 @@ def get_edge_density(img):
 # -----------------------------
 @app.route("/", methods=["GET", "POST"])
 def index():
-    threshold = 0.4  # デフォルトをUIと統一
+    threshold = 0.4
     base_name = None
     results = []
 
@@ -198,13 +239,11 @@ def index():
         base = request.files.get("base")
         files = request.files.getlist("folder")
 
-        # threshold
         try:
             threshold = float(request.form.get("threshold", 0.4))
         except Exception:
             threshold = 0.4
 
-        # --- base image resolve ---
         if base and base.filename:
             if not allowed_file(base.filename):
                 return render_template("index.html", error="対応していない画像形式です😢")
@@ -227,11 +266,9 @@ def index():
         if base_hist is None:
             return render_template("index.html", error="基準画像が壊れています😢")
 
-        # --- loop targets ---
         for f in files:
             if not f or not f.filename:
                 continue
-
             if not allowed_file(f.filename):
                 continue
 
@@ -272,14 +309,14 @@ def analyze():
 
     # --- CLIP類似度（0..1目安） ---
     clip_sim = 0.0
-    if CLIP_AVAILABLE:
-        try:
-            base_feat = get_clip_feature(base_path)
-            target_feat = get_clip_feature(target_path)
-            clip_sim = clamp01(float((base_feat @ target_feat.T).item()))
-        except Exception as e:
-            print("⚠️ CLIP失敗:", e)
-            clip_sim = 0.0
+    try:
+        base_feat = get_clip_feature(base_path)
+        target_feat = get_clip_feature(target_path)
+        clip_sim = clamp01(float((base_feat @ target_feat.T).item()))
+    except Exception as e:
+        # CLIPが無い/重くて失敗してもアプリは落とさない
+        print("⚠️ CLIP失敗:", e)
+        clip_sim = 0.0
 
     # --- 画像読み込み ---
     bimg = cv2.imread(base_path)
@@ -294,11 +331,11 @@ def analyze():
     if bh is not None and th is not None:
         color_sim = corr_to_01(cv2.compareHist(bh, th, cv2.HISTCMP_CORREL))
 
-    # 明るさ（差が小さいほど高得点）
+    # 明るさ
     b1, b2 = get_brightness(bimg), get_brightness(timg)
     bright_sim = diff_to_01(abs(b1 - b2), 80.0)
 
-    # 構造（エッジ量の差）
+    # 構造（エッジ量）
     e1, e2 = get_edge_density(bimg), get_edge_density(timg)
     edge_sim = diff_to_01(abs(e1 - e2), 0.15)
 
@@ -309,7 +346,7 @@ def analyze():
     overlay_name, bbox = make_overlay_with_bbox(base_path, target_path)
     overlay_url = f"/static/overlays/{overlay_name}" if overlay_name else f"/static/uploads/{target}"
 
-    # --- 総合スコア（100点） ---
+    # 総合（100点）
     overall = (
         0.25 * color_sim +
         0.15 * bright_sim +
@@ -319,7 +356,6 @@ def analyze():
     )
     score100 = int(round(clamp01(overall) * 100))
 
-    # 説明（ローカルテンプレ）
     reasons = []
     if color_sim > 0.75:
         reasons.append("色合いがかなり近い")
@@ -360,5 +396,4 @@ def analyze():
 
 
 if __name__ == "__main__":
-    # ローカル実行用（Render本番は gunicorn app:app で起動）
     app.run(host="0.0.0.0", port=5000, debug=True)
