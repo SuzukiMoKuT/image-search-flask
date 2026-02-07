@@ -3,3 +3,12 @@ gunicorn==22.0.0
 opencv-python-headless==4.10.0.84
 numpy==2.0.2
 Pillow==10.4.0
+
+# PyTorch CPU wheels
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+torchvision
+torchaudio
+
+# OpenAI CLIP
+git+https://github.com/openai/CLIP.git
