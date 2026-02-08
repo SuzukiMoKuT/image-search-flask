@@ -4,6 +4,8 @@ import uuid
 import cv2
 import numpy as np
 import requests
+from PIL import Image, ImageOps
+import io
 
 
 # =============================
@@ -26,6 +28,42 @@ ALLOWED_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 def allowed_file(filename: str) -> bool:
     ext = os.path.splitext(filename.lower())[1]
     return ext in ALLOWED_EXT
+
+CLIP_MAX_SIDE = 768        # 768 or 1024 推奨
+CLIP_JPEG_QUALITY = 85     # 80〜85 推奨
+CLIP_MAX_BYTES = 900_000   # 目安(0.9MB)。不要なら消してOK
+
+def clip_normalize_to_jpeg_bytes(path: str) -> bytes:
+    """
+    CLIP推論用に画像を軽量化してJPEG(bytes)にする
+    - EXIF回転反映（スマホ対策）
+    - 長辺を CLIP_MAX_SIDE に収める
+    - JPEG圧縮（必要ならサイズまでqualityを落とす）
+    """
+    img = Image.open(path)
+    img = ImageOps.exif_transpose(img).convert("RGB")
+
+    w, h = img.size
+    scale = min(1.0, CLIP_MAX_SIDE / max(w, h))
+    if scale < 1.0:
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=CLIP_JPEG_QUALITY, optimize=True)
+    data = buf.getvalue()
+
+    # 任意：まだ重い場合は quality を落として再圧縮
+    if len(data) > CLIP_MAX_BYTES:
+        q = 75
+        while q >= 55:
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=q, optimize=True)
+            data = buf.getvalue()
+            if len(data) <= CLIP_MAX_BYTES:
+                break
+            q -= 10
+
+    return data
 
 def clamp01(x: float) -> float:
     x = float(x)
@@ -222,7 +260,12 @@ def search_api():
         try:
             # base と targets を multipart で一括送信
             files = []
-            files.append(("base", ("base.jpg", open(base_path, "rb"), "image/jpeg")))
+            files.append(("base", ("base.jpg", clip_normalize_to_jpeg_bytes(base_path), "image/jpeg")))
+
+            for name, _ in top:
+                p = os.path.join(app.config["UPLOAD_FOLDER"], name)
+                files.append(("targets", (name, clip_normalize_to_jpeg_bytes(p), "image/jpeg")))
+
             for name, _ in top:
                 p = os.path.join(app.config["UPLOAD_FOLDER"], name)
                 files.append(("targets", (name, open(p, "rb"), "image/jpeg")))
