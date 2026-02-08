@@ -436,12 +436,12 @@
                             <div class="pill" onclick="bumpThreshold(-0.10)">−0.10</div>
                             <div class="pill" onclick="bumpThreshold(+0.05)">＋0.05</div>
                             <div class="pill" onclick="bumpThreshold(+0.10)">＋0.10</div>
-                            <div class="pill" onclick="setThreshold(0.40)">おすすめ(Recomend): 0.40</div>
-                            <div class="pill" onclick="setThreshold(0.70)">おすすめ(Recomend): 0.70</div>
+                            <div class="pill" onclick="setThreshold(0.40)">おすすめ(Recomended): 0.40</div>
+                            <div class="pill" onclick="setThreshold(0.70)">おすすめ(Recomended): 0.70</div>
                         </div>
                     </div>
 
-                    <button class="primary" type="submit">検索開始 </button>
+                    <button class="primary" type="submit">検索開始<br>Start Search</button>
                 </form>
             </div>
         </div>
@@ -452,7 +452,7 @@
             <div class="card">
                 <div class="hd">
                     <div class="title">
-                        <b>検索結果</b>
+                        <b>検索結果<br>Results</b>
                         <span>クリックで拡大 + 説明</span>
                     </div>
                 </div>
@@ -462,9 +462,10 @@
                     <div class="baseBox">
                         <img src="/static/uploads/{{ base }}" alt="base">
                         <div class="baseMeta">
-                            <b>基準画像</b>
+                            <b>基準画像 (Reference image)</b>
                             <span>基準画像は保持されます（再選択しなくてOK）</span>
-                            <span>しきい値: {{ "%.2f"|format(threshold | default(0.4)) }}</span>
+                            <span>The reference image will be retained (no need to reselect it)</span>
+                            <span>しきい値 (Threshold): {{ "%.2f"|format(threshold | default(0.4)) }}</span>
                         </div>
                     </div>
                     <div style="height:14px"></div>
@@ -488,7 +489,7 @@
                                     <img class="thumb" src="/static/uploads/{{ name }}" alt="result">
                                     <div class="meta">
                                         <div class="scoreLine">
-                                            <b>類似度</b>
+                                            <b>類似度 (Similarity)</b>
                                             <span>{{ "%.3f"|format(score) }}</span>
                                         </div>
                                         <div class="bar"><div style="width: {{ (bar*100)|round(0) }}%;"></div></div>
@@ -497,7 +498,7 @@
                                                 {% if desc %}
                                                     {{ desc }}
                                                 {% else %}
-                                                    クリックすると「どこが似てそうか」を説明します
+                                                    クリックで詳細を表示 (Click for details)
                                                 {% endif %}
                                             </div>
                                         </div>
@@ -507,9 +508,9 @@
 
                         {% else %}
                             <div class="empty">
-                                <b>まだ結果がありません</b><br>
-                                ① 基準画像を選ぶ → ② フォルダを選ぶ → ③ 検索開始。<br>
-                                もし0件なら、しきい値を少し下げてみてね（−0.05がおすすめ）。
+                                <b>まだ結果がありません (No results yet)</b><br>
+                                ① 基準画像を選ぶ (Select a reference image) → ② フォルダを選ぶ (Select a folder) → ③ 検索開始 (Start Search)<br>
+                                もし0件なら、しきい値を少し下げてみてね (If 0 results, try lowering the threshold a bit)
                             </div>
                         {% endif %}
 
@@ -525,7 +526,7 @@
     <div id="popup" onclick="closePopup(event)">
         <div class="modal" onclick="event.stopPropagation()">
             <div class="modalHd">
-                <b id="popup-title">詳細</b>
+                <b id="popup-title">詳細 (Details)</b>
                 <button class="x" type="button" onclick="forceClose()">✕</button>
             </div>
 
@@ -535,35 +536,42 @@
                 </div>
                 <div class="modalSide">
                     <div class="kv">
-                        <b>スコア(score)</b>
+                        <b>スコア (score)</b>
                         <span id="popup-score">-</span>
                     </div>
 
                     <div class="kv">
-                        <b>説明(explain)</b>
+                        <b>説明 (explain)</b>
                         <span id="popup-text">
                             <span class="loading"><span class="dot"></span><span class="dot"></span><span class="dot"></span> 準備中</span>
                         </span>
                     </div>
 
                     <div class="kv">
-                        <b>内訳(Breakdown)</b>
+                        <b>内訳 (Breakdown)</b>
 
-                        <span>色(color)</span>
+                        <span>色 (color)</span>
                         <div class="bar"><div id="m-color"></div></div>
 
-                        <span>明るさ(Brightness)</span>
+                        <span>明るさ (Brightness)</span>
                         <div class="bar"><div id="m-bright"></div></div>
 
-                        <span>構造(Structure)</span>
+                        <span>構造 (Structure)</span>
                         <div class="bar"><div id="m-struct"></div></div>
 
                         <span>形（ORB）</span>
                         <div class="bar"><div id="m-shape"></div></div>
 
+                        <button class="btn" type="button" id="clip-btn" onclick="runClipAnalysis()">
+                            🧠 CLIP解析（重い）
+                        </button>
+
+                        <span id="clip-note" style="font-size:12px; color: var(--muted);">
+                            CLIP: 未実行
+                        </span>
+
                         <span>CLIP</span>
                         <div class="bar"><div id="m-clip"></div></div>
-                        <span id="clip-note" style="font-size:12px; color: var(--muted);">CLIP: 未計算</span>
                     </div>
 
                     <div class="kv">
@@ -663,6 +671,52 @@
         }
     }
 
+    // ポップアップで選択中の画像（runClipAnalysisが参照する）
+    let currentBase = null;
+    let currentTarget = null;
+
+    function setClipButtonState(enabled, label){
+        const btn = document.getElementById("clip-btn");
+        if (!btn) return;
+        btn.disabled = !enabled;
+        btn.textContent = label || (enabled ? "🧠 CLIP解析（重い）" : "CLIP解析中…");
+    }
+
+    async function runClipAnalysis(){
+        const clipNote = document.getElementById("clip-note");
+        if (!currentBase || !currentTarget){
+            if (clipNote) clipNote.textContent = "CLIP: 対象が未選択";
+            return;
+        }
+
+        setClipButtonState(false, "CLIP解析中…");
+        if (clipNote) clipNote.textContent = "CLIP: 計算中…";
+
+        try{
+            const clipData = await fetchJsonWithTimeout(
+                "/analyze_clip",
+                {
+                    method: "POST",
+                    headers: {"Content-Type":"application/json"},
+                    body: JSON.stringify({ base: currentBase, target: currentTarget })
+                },
+                20000 // 20秒：重いので少し長め（好みで調整）
+            );
+
+            if (clipData && clipData.ok){
+                setBar("m-clip", clipData.clip);
+                if (clipNote) clipNote.textContent = `CLIP: ${clipData.clip} / 100`;
+            } else {
+                if (clipNote) clipNote.textContent = "CLIP: 失敗（スキップ）";
+            }
+        } catch(e){
+            console.error("CLIP failed:", e);
+            if (clipNote) clipNote.textContent = "CLIP: タイムアウト/失敗";
+        } finally {
+            setClipButtonState(true, "🧠 CLIP解析（重い）");
+        }
+    }
+
     /**
      * ポップアップ本体（ここが openPopup()）
      *
@@ -685,10 +739,20 @@
         // 基準画像が無ければ分析できない
         if (!base){
             sc.textContent = "—";
-            text.textContent = "基準画像が選ばれていません。まず検索を実行してね📸";
+            text.textContent = "(基準画像が選ばれていません。まず検索を実行してね📸(No reference image has been selected. Please run a search first))";
             popup.style.display = "flex";
             return;
         }
+
+        currentBase = base;
+        currentTarget = name;
+
+        setBar("m-clip", 0);
+        const clipNote = document.getElementById("clip-note");
+        if (clipNote) clipNote.textContent = "CLIP: 未実行";
+        setClipButtonState(true, "🧠 CLIP解析（重い）");
+
+
 
         // まずは「その画像」を表示（あとでoverlayに差し替える）
         img.src = "/static/uploads/" + name;
@@ -740,32 +804,6 @@
                 setBar("m-bright", data.metrics.brightness);
                 setBar("m-struct", data.metrics.structure);
                 setBar("m-shape", data.metrics.shape);
-                
-                // --- CLIPは後追いで取得（遅くてもUIは止めない）---
-                if (clipNote) clipNote.textContent = "CLIP: 計算中…";
-
-                try{
-                    const clipData = await fetchJsonWithTimeout(
-                        "/analyze_clip",
-                        {
-                            method: "POST",
-                            headers: {"Content-Type":"application/json"},
-                            body: JSON.stringify({ base: base, target: name })
-                        },
-                        15000 // 15秒で諦める（ここ重要）
-                    );
-
-                    if (clipData && clipData.ok){
-                        setBar("m-clip", clipData.clip);
-                        if (clipNote) clipNote.textContent = `CLIP: ${clipData.clip} / 100`;
-                    } else {
-                        if (clipNote) clipNote.textContent = "CLIP: 失敗（スキップ）";
-                    }
-                } catch(e2){
-                    console.log("CLIP skipped:", e2);
-                    if (clipNote) clipNote.textContent = "CLIP: タイムアウト（スキップ）";
-                }
-
             }
 
             // ---------------------------------------------
@@ -777,18 +815,23 @@
             // setBar("m-clip", clip.clip);
             // ---------------------------------------------
 
-        }catch(e){
+        } catch(e){
             sc.textContent = "—";
 
-            // 502などHTTPエラーの時、原因が見えるようにする
             if (e && e.status){
-                text.textContent = `分析に失敗しました（HTTP ${e.status}）。サーバが混雑/重い可能性があります。`;
+                text.textContent =
+                    `分析に失敗しました（HTTP ${e.status}）。サーバが混雑/重い可能性があります。\n` +
+                    `Analysis failed (HTTP ${e.status}). The server may be busy or slow.`;
                 console.error("analyze failed:", e.status, e.bodyText || "");
             } else if (e && e.name === "AbortError"){
-                text.textContent = "分析がタイムアウトしました（重い処理のため中断）。";
+                text.textContent =
+                    "分析がタイムアウトしました（重い処理のため中断）。\n" +
+                    "The analysis timed out (interrupted due to heavy processing).";
                 console.error("analyze timeout:", e);
             } else {
-                text.textContent = "分析に失敗しました（/analyze を確認してね）。";
+                text.textContent =
+                    "分析に失敗しました（/analyze を確認してね）。\n" +
+                    "Analysis failed (check /analyze).";
                 console.error("analyze error:", e);
             }
         }
@@ -817,7 +860,7 @@
         setBar("m-shape", 0);
         setBar("m-clip", 0);
         const clipNote = document.getElementById("clip-note");
-        if (clipNote) clipNote.textContent = "CLIP: 未計算";
+        if (clipNote) clipNote.textContent = "CLIP: 未計算 (Uncalculated)";
     }
 
 </script>
