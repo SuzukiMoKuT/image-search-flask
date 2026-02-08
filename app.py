@@ -43,7 +43,7 @@ CLIP_AVAILABLE = None  # 未判定
 
 def clip_similarity_once(base_path: str, target_path: str) -> float:
     """
-    1リクエスト内でCLIPモデルを1回だけロードして2枚をエンコードする（超重要）
+    1リクエスト内でCLIPモデルを1回だけロードして2枚をエンコードする（重要）
     """
     global CLIP_AVAILABLE
     if CLIP_AVAILABLE is None:
@@ -51,23 +51,36 @@ def clip_similarity_once(base_path: str, target_path: str) -> float:
     if not CLIP_AVAILABLE:
         raise RuntimeError("CLIP is not available")
 
+    # キャッシュONなら常駐（速いがメモリ増える）
+    global _clip_model, _clip_preprocess, _clip_device
+
+    if CLIP_CACHE:
+        if _clip_model is None or _clip_preprocess is None:
+            _clip_model, _clip_preprocess, _clip_device = _load_clip()
+        model, preprocess, device = _clip_model, _clip_preprocess, _clip_device
+        import torch
+        with torch.inference_mode():
+            b = preprocess(Image.open(base_path)).unsqueeze(0).to(device)
+            t = preprocess(Image.open(target_path)).unsqueeze(0).to(device)
+            bf = model.encode_image(b)
+            tf = model.encode_image(t)
+            bf = bf / bf.norm(dim=-1, keepdim=True)
+            tf = tf / tf.norm(dim=-1, keepdim=True)
+            return clamp01(float((bf @ tf.T).item()))
+
+    # キャッシュOFF（無料枠安全）：毎回ロード→計算→解放
     model, preprocess, device = _load_clip()
     try:
         import torch
         with torch.inference_mode():
             b = preprocess(Image.open(base_path)).unsqueeze(0).to(device)
             t = preprocess(Image.open(target_path)).unsqueeze(0).to(device)
-
             bf = model.encode_image(b)
             tf = model.encode_image(t)
-
             bf = bf / bf.norm(dim=-1, keepdim=True)
             tf = tf / tf.norm(dim=-1, keepdim=True)
-
-            sim = float((bf @ tf.T).item())
-            return clamp01(sim)
+            return clamp01(float((bf @ tf.T).item()))
     finally:
-        # 解放（無料枠向け）
         try:
             del model, preprocess
         except Exception:
@@ -341,13 +354,9 @@ def analyze():
     base_path = os.path.join(app.config["UPLOAD_FOLDER"], os.path.basename(base))
     target_path = os.path.join(app.config["UPLOAD_FOLDER"], os.path.basename(target))
 
-    # --- CLIP類似度（0..1目安） ---
+    
+    # --- CLIP類似度（ここでは計算しない：後追いで /analyze_clip でやる） ---
     clip_sim = 0.0
-    try:
-        clip_sim = clip_similarity_once(base_path, target_path)
-    except Exception as e:
-        print("⚠️ CLIP失敗:", e)
-        clip_sim = 0.0
 
     # --- 画像読み込み ---
     bimg = cv2.imread(base_path)
@@ -379,12 +388,12 @@ def analyze():
 
     # 総合（100点）
     overall = (
-        0.25 * color_sim +
-        0.15 * bright_sim +
-        0.15 * edge_sim +
-        0.25 * orb_sim +
-        0.20 * clip_sim
+        0.30 * color_sim +
+        0.20 * bright_sim +
+        0.20 * edge_sim +
+        0.30 * orb_sim
     )
+
     score100 = int(round(clamp01(overall) * 100))
 
     reasons = []
@@ -425,6 +434,24 @@ def analyze():
         "bbox": bbox
     })
 
+
+@app.route("/analyze_clip", methods=["POST"])
+def analyze_clip():
+    data = request.json or {}
+    base = data.get("base")
+    target = data.get("target")
+    if not base or not target:
+        return jsonify({"ok": False, "clip": 0})
+
+    base_path = os.path.join(app.config["UPLOAD_FOLDER"], os.path.basename(base))
+    target_path = os.path.join(app.config["UPLOAD_FOLDER"], os.path.basename(target))
+
+    try:
+        sim = clip_similarity_once(base_path, target_path)  # 0..1
+        return jsonify({"ok": True, "clip": int(sim * 100)})
+    except Exception as e:
+        print("⚠️ /analyze_clip 失敗:", e)
+        return jsonify({"ok": False, "clip": 0})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
