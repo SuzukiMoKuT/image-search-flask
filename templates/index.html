@@ -564,10 +564,6 @@
                         <span>形（ORB）</span>
                         <div class="bar"><div id="m-shape"></div></div>
 
-                        <button class="btn" type="button" id="clip-btn" onclick="runClipAnalysis()">
-                            🧠 CLIP解析（重い）
-                        </button>
-
                         <span id="clip-note" style="font-size:12px; color: var(--muted);">
                             CLIP: 未実行
                         </span>
@@ -639,14 +635,23 @@
         el.style.width = pct + "%";
     }
 
-    /**
-     * 結果カード（.item）クリック → data属性から値を取り出して openPopup を呼ぶ入口
-     */
+    // ポップアップ用に、検索時点のスコアを保持
+    let currentScores = null;
+
     function openPopupFromEl(el){
         const name = el.dataset.name;
-        const score = Number(el.dataset.score); // 今は使ってないけど残してOK
+        const score = Number(el.dataset.score); // 互換で残す
+
+        // ★検索時点のスコアを保存（これをポップアップ表示に使う）
+        currentScores = {
+            hist100: Number(el.dataset.hist100 || 0),
+            clip: Number(el.dataset.clip || 0),
+            final100: Number(el.dataset.final100 || 0),
+        };
+
         openPopup(name, score);
     }
+
 
     /**
      * fetchのタイムアウト付きラッパー（ネットが遅い/サーバが重い時に固まらない）
@@ -676,13 +681,6 @@
     // ポップアップで選択中の画像
     let currentBase = null;
     let currentTarget = null;
-
-    function setClipButtonState(enabled, label){
-        const btn = document.getElementById("clip-btn");
-        if (!btn) return;
-        btn.disabled = !enabled;
-        btn.textContent = label || (enabled ? "🧠 CLIP解析（重い）" : "CLIP解析中…");
-    }
 
 
     // ---- HF CLIP API URL ----
@@ -740,87 +738,6 @@
     }
 
     /**
-     * HF Space に直接 multipart POST して CLIP を計算する（ポーリング不要）
-     */
-    async function runClipAnalysis(){
-        const clipNote = document.getElementById("clip-note");
-
-        if (!currentBase || !currentTarget){
-            if (clipNote) clipNote.textContent = "CLIP: 対象が未選択";
-            return;
-        }
-
-        setClipButtonState(false, "CLIP解析中…");
-        if (clipNote) clipNote.textContent = "CLIP: 画像準備中…";
-        setBar("m-clip", 0);
-
-        // Render上の画像URL（同一オリジンなのでCORS不要）
-        const baseUrl = "/static/uploads/" + currentBase;
-        const targetUrl = "/static/uploads/" + currentTarget;
-
-        try{
-            // 1) Renderから画像をBlobで取得（ここは速いはず）
-            const [baseBlob, targetBlob] = await Promise.all([
-                fetchBlobWithTimeout(baseUrl, 12000),
-                fetchBlobWithTimeout(targetUrl, 12000),
-            ]);
-
-            if (clipNote) clipNote.textContent = "CLIP: HFへ送信中…";
-
-            // 2) multipart組み立て
-            const fd = new FormData();
-            // filename を付けるとFastAPI側で扱いやすい
-            fd.append("base", baseBlob, currentBase || "base.jpg");
-            fd.append("target", targetBlob, currentTarget || "target.jpg");
-
-            // 3) HFへPOST（コールドスタート考慮で少し長め）
-            // 初回は遅いので 45秒くらいまで許容（無料枠の現実ライン）
-            const data = await postMultipartJsonWithTimeout(HF_CLIP_SIM_URL, fd, 45000);
-
-            if(!data || !data.ok){
-                const msg = data?.error || "HFの応答が不正です";
-                throw new Error(msg);
-            }
-
-            const clip = Number(data.clip ?? 0);
-            setBar("m-clip", clip);
-            if (clipNote) clipNote.textContent = `CLIP: ${clip} / 100`;
-
-            setClipButtonState(true, "🧠 CLIP解析（重い）");
-            return;
-
-        } catch(e){
-            console.error("HF clip_sim failed:", e);
-
-            // Abort（タイムアウト）
-            if (e && e.name === "AbortError"){
-                if (clipNote) clipNote.textContent = "CLIP: タイムアウト（HFが起動中/混雑中かも）→ もう一度押して再試行";
-                setClipButtonState(true, "🔁 再試行");
-                return;
-            }
-
-            // HTTPエラー
-            if (e && e.status){
-                // 503/502系：スリープ/起動中/混雑の可能性が高い
-                if (e.status === 502 || e.status === 503 || e.status === 504){
-                    if (clipNote) clipNote.textContent = `CLIP: HFが起動中/混雑中（HTTP ${e.status}）→ 少し待って再試行`;
-                    setClipButtonState(true, "🔁 再試行");
-                    return;
-                }
-
-                if (clipNote) clipNote.textContent = `CLIP: 失敗（HTTP ${e.status}）→ 再試行`;
-                setClipButtonState(true, "🔁 再試行");
-                return;
-            }
-
-            // その他
-            if (clipNote) clipNote.textContent = "CLIP: 失敗 → 再試行";
-            setClipButtonState(true, "🔁 再試行");
-        }
-    }
-
-
-    /**
      * ポップアップ本体（ここが openPopup()）
      *
      * いまは /analyze が重くて 502 になりやすいので、
@@ -848,11 +765,16 @@
         currentBase = base;
         currentTarget = name;
 
-        // CLIP UI初期化
-        setBar("m-clip", 0);
+        // CLIP UI：検索時点の値を即反映（正解①）
         const clipNote = document.getElementById("clip-note");
-        if (clipNote) clipNote.textContent = "CLIP: 未実行";
-        setClipButtonState(true, "🧠 CLIP解析（重い）");
+
+        // currentScores があればそれを使う
+        const clipFromSearch = currentScores?.clip ?? 0;
+        setBar("m-clip", clipFromSearch);
+
+        if (clipNote) {
+            clipNote.textContent = `CLIP: ${clipFromSearch} / 100（検索時に計算済み）`;
+        }
 
 
         // まずは「その画像」を表示（あとでoverlayに差し替える）
@@ -861,6 +783,11 @@
 
         // UIを「分析中」にする
         sc.textContent = "分析中(Analyzing)…";
+        // まず検索時点の総合スコアを表示（CLIP込み）
+        if (currentScores && currentScores.final100 !== undefined) {
+            sc.textContent = `${currentScores.final100} / 100（検索時の総合）`;
+        }
+
         text.innerHTML = '<span class="loading"><span class="dot"></span><span class="dot"></span><span class="dot"></span> 分析中(Analyzing)…</span>';
 
         // バーは一旦ゼロ表示
@@ -887,13 +814,6 @@
             // overlay画像があれば差し替え
             if (data.overlay_url){
                 img.src = data.overlay_url;
-            }
-
-            // 100点スコア
-            if (data.score100 !== undefined){
-                sc.textContent = String(data.score100) + " / 100";
-            } else {
-                sc.textContent = "—";
             }
 
             // 説明文
@@ -938,9 +858,6 @@
         }
     }
 
-    /**
-     * ×ボタンで強制クローズ（表示も初期化）
-     */
     function forceClose(){
         document.getElementById("popup").style.display = "none";
         document.getElementById("popup-img").src = "";
@@ -951,14 +868,10 @@
         setBar("m-struct", 0);
         setBar("m-shape", 0);
         setBar("m-clip", 0);
+
         const clipNote = document.getElementById("clip-note");
         if (clipNote) clipNote.textContent = "CLIP: 未計算 (Uncalculated)";
-        setClipButtonState(true, "🧠 CLIP解析（重い）");
-
-        // ★重要：閉じる時も止める
-        setClipButtonState(true, "🧠 CLIP解析（重い）");
     }
-
 
     function showOverlay(show){
         const o = document.getElementById("searchOverlay");
@@ -1001,6 +914,9 @@
                 <div class="item"
                     data-name="${name}"
                     data-score="${(r.hist ?? 0)}"
+                    data-hist100="${(r.hist100 ?? 0)}"
+                    data-clip="${(r.clip ?? 0)}"
+                    data-final100="${(r.final100 ?? 0)}"
                     onclick="openPopupFromEl(this)"
                     role="button" tabindex="0">
                     <img class="thumb" src="/static/uploads/${name}" alt="result">
