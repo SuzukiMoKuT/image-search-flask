@@ -944,9 +944,9 @@
     // =============================
 
     // 目標：スマホの巨大画像を /search_api に送る前に軽量化する
-    const CLIENT_MAX_SIDE = 1280;     // 768〜1280推奨（まずは1280で品質優先）
-    const CLIENT_JPEG_QUALITY = 0.82; // 0.75〜0.85推奨
-    const CLIENT_MAX_BYTES_PER_FILE = 1_000_000; // 1MB目標（必要なら増減）
+    const CLIENT_MAX_SIDE = 1024   // 768〜1280推奨（まずは1024で品質優先）
+    const CLIENT_JPEG_QUALITY = 0.72// 0.75〜0.85推奨
+    const CLIENT_MAX_BYTES_PER_FILE = 450_000; // 450KB目標
 
     function extToMime(name){
         const lower = (name || "").toLowerCase();
