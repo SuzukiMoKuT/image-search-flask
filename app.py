@@ -5,6 +5,8 @@ import cv2
 import numpy as np
 from PIL import Image
 import gc
+import threading
+import time
 
 # -----------------------------
 # App / Folders
@@ -26,6 +28,53 @@ ALLOWED_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 def allowed_file(filename: str) -> bool:
     ext = os.path.splitext(filename.lower())[1]
     return ext in ALLOWED_EXT
+
+
+# -----------------------------
+# CLIP Jobs (in-memory)
+# -----------------------------
+# 注意：メモリ上の簡易Job。Renderが再起動すると消える（無料枠ではまずこれでOK）
+CLIP_JOBS = {}
+CLIP_JOBS_LOCK = threading.Lock()
+
+# Jobは溜まり続けるので自動掃除（秒）
+JOB_TTL_SEC = 30 * 60  # 30分
+
+def _cleanup_jobs():
+    now = time.time()
+    with CLIP_JOBS_LOCK:
+        dead = [jid for jid, j in CLIP_JOBS.items() if now - j.get("created_at", now) > JOB_TTL_SEC]
+        for jid in dead:
+            CLIP_JOBS.pop(jid, None)
+
+def _run_clip_job(job_id: str, base_path: str, target_path: str):
+    # 実行開始
+    with CLIP_JOBS_LOCK:
+        job = CLIP_JOBS.get(job_id)
+        if not job:
+            return
+        job["status"] = "running"
+        job["updated_at"] = time.time()
+
+    try:
+        sim = clip_similarity_once(base_path, target_path)  # 0..1
+        clip100 = int(sim * 100)
+
+        with CLIP_JOBS_LOCK:
+            job = CLIP_JOBS.get(job_id)
+            if job:
+                job["status"] = "done"
+                job["result"] = {"clip": clip100}
+                job["updated_at"] = time.time()
+
+    except Exception as e:
+        print("⚠️ CLIP job failed:", e)
+        with CLIP_JOBS_LOCK:
+            job = CLIP_JOBS.get(job_id)
+            if job:
+                job["status"] = "error"
+                job["error"] = str(e)
+                job["updated_at"] = time.time()
 
 
 # -----------------------------
@@ -433,6 +482,64 @@ def analyze():
         "overlay_url": overlay_url,
         "bbox": bbox
     })
+
+
+@app.route("/clip_start", methods=["POST"])
+def clip_start():
+    _cleanup_jobs()
+
+    data = request.json or {}
+    base = data.get("base")
+    target = data.get("target")
+    if not base or not target:
+        return jsonify({"ok": False, "error": "missing params"}), 400
+
+    base_path = os.path.join(app.config["UPLOAD_FOLDER"], os.path.basename(base))
+    target_path = os.path.join(app.config["UPLOAD_FOLDER"], os.path.basename(target))
+
+    if not os.path.exists(base_path) or not os.path.exists(target_path):
+        return jsonify({"ok": False, "error": "file not found"}), 404
+
+    job_id = str(uuid.uuid4())
+
+    with CLIP_JOBS_LOCK:
+        CLIP_JOBS[job_id] = {
+            "status": "queued",
+            "created_at": time.time(),
+            "updated_at": time.time(),
+            "result": None,
+            "error": None,
+        }
+
+    # 別スレッドで実行（HTTP応答は即返す）
+    t = threading.Thread(target=_run_clip_job, args=(job_id, base_path, target_path), daemon=True)
+    t.start()
+
+    return jsonify({"ok": True, "job_id": job_id})
+
+
+@app.route("/clip_status/<job_id>", methods=["GET"])
+def clip_status(job_id):
+    _cleanup_jobs()
+
+    with CLIP_JOBS_LOCK:
+        job = CLIP_JOBS.get(job_id)
+
+    if not job:
+        return jsonify({"ok": False, "error": "job not found"}), 404
+
+    # status: queued / running / done / error
+    payload = {
+        "ok": True,
+        "status": job["status"],
+    }
+
+    if job["status"] == "done":
+        payload["result"] = job.get("result")  # {"clip": 0..100}
+    if job["status"] == "error":
+        payload["error"] = job.get("error", "unknown")
+
+    return jsonify(payload)
 
 
 @app.route("/analyze_clip", methods=["POST"])
