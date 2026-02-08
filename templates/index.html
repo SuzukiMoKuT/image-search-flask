@@ -682,83 +682,64 @@
         btn.textContent = label || (enabled ? "🧠 CLIP解析（重い）" : "CLIP解析中…");
     }
 
-    // ---- CLIP Job polling (setTimeout版) ----
-    let clipJobId = null;
-    let clipPollTimer = null;     // setTimeout のID
-    let clipPollStop = false;     // 停止フラグ（forceCloseで止める）
 
-    function stopClipPolling(){
-        clipPollStop = true;
-        if (clipPollTimer){
-            clearTimeout(clipPollTimer);
-            clipPollTimer = null;
-        }
-        clipJobId = null;
-    }
+    // ---- HF CLIP API URL ----
+    const HF_CLIP_SIM_URL = "https://taku1103-clip-sim-api.hf.space/clip_sim";
 
-    function scheduleNextPoll(ms){
-        if (clipPollStop) return;
-        const wait = Math.max(800, Math.min(10000, Number(ms) || 3000)); // 0.8〜10秒にクランプ
-        clipPollTimer = setTimeout(pollClipStatusOnce, wait);
-    }
-
-    async function pollClipStatusOnce(){
-        const clipNote = document.getElementById("clip-note");
-        if (clipPollStop || !clipJobId) return;
+    /**
+     * タイムアウト付きで fetch して Blob を返す
+     */
+    async function fetchBlobWithTimeout(url, timeoutMs){
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), timeoutMs);
 
         try{
-            // GET /clip_status/<job_id>
-            const st = await fetchJsonWithTimeout(`/clip_status/${clipJobId}`, { method: "GET" }, 8000);
-
-            if(!st || !st.ok){
-                // 一時失敗は次回で拾う
-                scheduleNextPoll(4000);
-                return;
+            const res = await fetch(url, { method: "GET", cache: "no-store", signal: ctrl.signal });
+            if(!res.ok){
+                const t = await res.text().catch(() => "");
+                const err = new Error(`HTTP ${res.status} ${res.statusText}`);
+                err.status = res.status;
+                err.bodyText = t;
+                throw err;
             }
-
-            if(st.status === "queued"){
-                if (clipNote) clipNote.textContent = "CLIP: 待機中…";
-                scheduleNextPoll(st.next_poll_ms || 4000);
-                return;
-            }
-
-            if(st.status === "running"){
-                if (clipNote) clipNote.textContent = "CLIP: 計算中…";
-                scheduleNextPoll(st.next_poll_ms || 4000);
-                return;
-            }
-
-            if(st.status === "done"){
-                const clip = st.result?.clip ?? 0;
-                setBar("m-clip", clip);
-                if (clipNote) clipNote.textContent = `CLIP: ${clip} / 100`;
-                setClipButtonState(true, "🧠 CLIP解析（重い）");
-                stopClipPolling();
-                return;
-            }
-
-            if(st.status === "error"){
-                if (clipNote) clipNote.textContent = "CLIP: 失敗（サーバ側エラー）";
-                console.error("clip job error:", st.error);
-                setClipButtonState(true, "🧠 CLIP解析（重い）");
-                stopClipPolling();
-                return;
-            }
-
-            // 想定外
-            scheduleNextPoll(4000);
-
-        }catch(e){
-            // 503などの一時障害は “間隔を伸ばして” 継続（ここが肝）
-            console.log("clip_status transient error:", e);
-
-            const clipNote = document.getElementById("clip-note");
-            if (clipNote) clipNote.textContent = "CLIP: 確認中…（サーバ混雑）";
-
-            scheduleNextPoll(7000);
+            return await res.blob();
+        } finally {
+            clearTimeout(timer);
         }
     }
 
+    /**
+     * タイムアウト付きで multipart POST → JSON を返す
+     */
+    async function postMultipartJsonWithTimeout(url, formData, timeoutMs){
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+
+        try{
+            const res = await fetch(url, {
+                method: "POST",
+                body: formData,
+                signal: ctrl.signal
+                // Content-Type は自分で付けない（ブラウザがboundary付きで付ける）
+            });
+
+            if(!res.ok){
+                const t = await res.text().catch(() => "");
+                const err = new Error(`HTTP ${res.status} ${res.statusText}`);
+                err.status = res.status;
+                err.bodyText = t;
+                throw err;
+            }
+
+            return await res.json();
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    /**
+     * HF Space に直接 multipart POST して CLIP を計算する（ポーリング不要）
+     */
     async function runClipAnalysis(){
         const clipNote = document.getElementById("clip-note");
 
@@ -767,53 +748,72 @@
             return;
         }
 
-        // 既存ポーリング停止（二重起動防止）
-        stopClipPolling();
-        clipPollStop = false;
-
-        setClipButtonState(false, "CLIP解析開始…");
-        if (clipNote) clipNote.textContent = "CLIP: ジョブ開始中…";
+        setClipButtonState(false, "CLIP解析中…");
+        if (clipNote) clipNote.textContent = "CLIP: 画像準備中…";
         setBar("m-clip", 0);
 
-        // 1) start
-        try{
-            const start = await fetchJsonWithTimeout(
-                "/clip_start",
-                {
-                    method: "POST",
-                    headers: {"Content-Type":"application/json"},
-                    body: JSON.stringify({ base: currentBase, target: currentTarget })
-                },
-                8000
-            );
+        // Render上の画像URL（同一オリジンなのでCORS不要）
+        const baseUrl = "/static/uploads/" + currentBase;
+        const targetUrl = "/static/uploads/" + currentTarget;
 
-            if(!start || !start.ok || !start.job_id){
-                if (clipNote) clipNote.textContent = "CLIP: 開始失敗（job_idなし）";
-                setClipButtonState(true, "🧠 CLIP解析（重い）");
+        try{
+            // 1) Renderから画像をBlobで取得（ここは速いはず）
+            const [baseBlob, targetBlob] = await Promise.all([
+                fetchBlobWithTimeout(baseUrl, 12000),
+                fetchBlobWithTimeout(targetUrl, 12000),
+            ]);
+
+            if (clipNote) clipNote.textContent = "CLIP: HFへ送信中…";
+
+            // 2) multipart組み立て
+            const fd = new FormData();
+            // filename を付けるとFastAPI側で扱いやすい
+            fd.append("base", baseBlob, currentBase || "base.jpg");
+            fd.append("target", targetBlob, currentTarget || "target.jpg");
+
+            // 3) HFへPOST（コールドスタート考慮で少し長め）
+            // 初回は遅いので 45秒くらいまで許容（無料枠の現実ライン）
+            const data = await postMultipartJsonWithTimeout(HF_CLIP_SIM_URL, fd, 45000);
+
+            if(!data || !data.ok){
+                const msg = data?.error || "HFの応答が不正です";
+                throw new Error(msg);
+            }
+
+            const clip = Number(data.clip ?? 0);
+            setBar("m-clip", clip);
+            if (clipNote) clipNote.textContent = `CLIP: ${clip} / 100`;
+
+            setClipButtonState(true, "🧠 CLIP解析（重い）");
+            return;
+
+        } catch(e){
+            console.error("HF clip_sim failed:", e);
+
+            // Abort（タイムアウト）
+            if (e && e.name === "AbortError"){
+                if (clipNote) clipNote.textContent = "CLIP: タイムアウト（HFが起動中/混雑中かも）→ もう一度押して再試行";
+                setClipButtonState(true, "🔁 再試行");
                 return;
             }
 
-            clipJobId = start.job_id;
-            if (clipNote) clipNote.textContent = "CLIP: 計算中…（進捗確認中）";
-            setClipButtonState(false, "CLIP解析中…");
+            // HTTPエラー
+            if (e && e.status){
+                // 503/502系：スリープ/起動中/混雑の可能性が高い
+                if (e.status === 502 || e.status === 503 || e.status === 504){
+                    if (clipNote) clipNote.textContent = `CLIP: HFが起動中/混雑中（HTTP ${e.status}）→ 少し待って再試行`;
+                    setClipButtonState(true, "🔁 再試行");
+                    return;
+                }
 
-            // 2) 最初のポーリング（最初は少し待ってから）
-            scheduleNextPoll(2000);
-
-        }catch(e){
-            // 429(server busy) を分けて案内すると親切
-            if (e && e.status === 429){
-                if (clipNote) clipNote.textContent = "CLIP: サーバが混雑中。少し待ってもう一度！";
-            } else if (e && e.status){
-                if (clipNote) clipNote.textContent = `CLIP: 開始失敗（HTTP ${e.status}）`;
-            } else if (e && e.name === "AbortError"){
-                if (clipNote) clipNote.textContent = "CLIP: 開始タイムアウト";
-            } else {
-                if (clipNote) clipNote.textContent = "CLIP: 開始失敗";
+                if (clipNote) clipNote.textContent = `CLIP: 失敗（HTTP ${e.status}）→ 再試行`;
+                setClipButtonState(true, "🔁 再試行");
+                return;
             }
-            console.error("clip_start failed:", e);
-            setClipButtonState(true, "🧠 CLIP解析（重い）");
-            stopClipPolling();
+
+            // その他
+            if (clipNote) clipNote.textContent = "CLIP: 失敗 → 再試行";
+            setClipButtonState(true, "🔁 再試行");
         }
     }
 
@@ -954,12 +954,6 @@
         setBar("m-clip", 0);
         const clipNote = document.getElementById("clip-note");
         if (clipNote) clipNote.textContent = "CLIP: 未計算 (Uncalculated)";
-        // CLIPのポーリング停止
-        if (clipJobTimer){
-            clearInterval(clipJobTimer);
-            clipJobTimer = null;
-        }
-        clipJobId = null;
         setClipButtonState(true, "🧠 CLIP解析（重い）");
 
         // ★重要：閉じる時も止める
