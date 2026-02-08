@@ -846,9 +846,6 @@
         currentBase = base;
         currentTarget = name;
 
-        // ★重要：前回のポーリングを止める
-        stopClipPolling();
-
         // CLIP UI初期化
         setBar("m-clip", 0);
         const clipNote = document.getElementById("clip-note");
@@ -957,7 +954,6 @@
         setClipButtonState(true, "🧠 CLIP解析（重い）");
 
         // ★重要：閉じる時も止める
-        stopClipPolling();
         setClipButtonState(true, "🧠 CLIP解析（重い）");
     }
 
