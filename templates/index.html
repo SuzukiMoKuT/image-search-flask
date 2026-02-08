@@ -959,7 +959,107 @@
         setClipButtonState(true, "🧠 CLIP解析（重い）");
     }
 
+
+    function showOverlay(show){
+        const o = document.getElementById("searchOverlay");
+        if(!o) return;
+        o.style.display = show ? "flex" : "none";
+    }
+
+    function renderResults(baseName, threshold, results){
+        // hidden prev_base 更新（次回も基準画像維持できる）
+        const prev = document.querySelector('input[name="prev_base"]');
+        if(prev) prev.value = baseName;
+
+        // 基準画像表示の差し替え（ページ内に baseBox がある前提）
+        // もしベース表示がJSで無いなら、ここは無理に触らなくてOK
+        const baseImg = document.querySelector(".baseBox img");
+        if(baseImg) baseImg.src = "/static/uploads/" + baseName;
+
+        // resultsArea を作って上書き
+        const area = document.getElementById("resultsArea");
+        if(!area) return;
+
+        if(!results || results.length === 0){
+            area.innerHTML = `
+                <div class="empty">
+                    <b>0件でした</b><br>
+                    しきい値を下げてみてね（Threshold: ${Number(threshold).toFixed(2)}）
+                </div>
+            `;
+            return;
+        }
+
+        const cards = results.map(r => {
+            const name = r.name;
+            const final100 = r.final100 ?? 0;
+            // 表示用のバー幅
+            const bar = Math.max(0, Math.min(100, final100));
+
+            // data-score は openPopupFromEl が読む（今は使ってなくてもOK）
+            return `
+                <div class="item"
+                    data-name="${name}"
+                    data-score="${(r.hist ?? 0)}"
+                    onclick="openPopupFromEl(this)"
+                    role="button" tabindex="0">
+                    <img class="thumb" src="/static/uploads/${name}" alt="result">
+                    <div class="meta">
+                        <div class="scoreLine">
+                            <b>総合 (OpenCV+CLIP)</b>
+                            <span>${final100} / 100</span>
+                        </div>
+                        <div class="bar"><div style="width:${bar}%;"></div></div>
+                        <div class="desc">
+                            OpenCV:${r.hist100 ?? 0} / CLIP:${r.clip ?? 0}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join("");
+
+        area.innerHTML = `<div class="resultsGrid">${cards}</div>`;
+    }
+
+    (function hookSearchForm(){
+        const form = document.getElementById("searchForm");
+        if(!form) return;
+
+        form.addEventListener("submit", async (e) => {
+            e.preventDefault();
+
+            showOverlay(true);
+
+            try{
+                const fd = new FormData(form);
+                const res = await fetch("/search_api", { method:"POST", body: fd });
+                const data = await res.json().catch(() => null);
+
+                if(!res.ok || !data || !data.ok){
+                    const msg = data?.error || `検索に失敗しました（HTTP ${res.status}）`;
+                    alert(msg);
+                    showOverlay(false);
+                    return;
+                }
+
+                renderResults(data.base, data.threshold, data.results);
+                showOverlay(false);
+
+            } catch(err){
+                console.error(err);
+                alert("検索に失敗しました（通信エラー）");
+                showOverlay(false);
+            }
+        });
+    })();
 </script>
+
+<div id="searchOverlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:99999; align-items:center; justify-content:center;">
+    <div style="padding:16px 18px; border-radius:14px; border:1px solid rgba(255,255,255,.2); background:rgba(10,16,40,.92); color:#fff;">
+        🔎 検索中…（OpenCV → CLIP反映）<br>
+        <span style="font-size:12px; opacity:.8;">初回は少し時間がかかることがあります</span>
+    </div>
+</div>
 
 </body>
 </html>
