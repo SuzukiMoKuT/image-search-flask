@@ -560,6 +560,10 @@
 
                         <span>形（ORB）</span>
                         <div class="bar"><div id="m-shape"></div></div>
+
+                        <span>CLIP</span>
+                        <div class="bar"><div id="m-clip"></div></div>
+                        <span id="clip-note" style="font-size:12px; color: var(--muted);">CLIP: 未計算</span>
                     </div>
 
                     <div class="kv">
@@ -611,7 +615,13 @@
         syncThreshold(v, true);
     }
 
-    // Popup
+    // -----------------------------
+    // Popup helpers
+    // -----------------------------
+
+    /**
+    * バー表示を 0〜100% で反映する
+    */
     function setBar(id, v){
         const el = document.getElementById(id);
         if (!el) return;
@@ -619,12 +629,49 @@
         el.style.width = pct + "%";
     }
 
+    /**
+     * 結果カード（.item）クリック → data属性から値を取り出して openPopup を呼ぶ入口
+     */
     function openPopupFromEl(el){
         const name = el.dataset.name;
-        const score = Number(el.dataset.score);
+        const score = Number(el.dataset.score); // 今は使ってないけど残してOK
         openPopup(name, score);
     }
 
+    /**
+     * fetchのタイムアウト付きラッパー（ネットが遅い/サーバが重い時に固まらない）
+     */
+    async function fetchJsonWithTimeout(url, options, timeoutMs){
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+
+        try{
+            const res = await fetch(url, { ...options, signal: ctrl.signal });
+
+            // HTTPエラー時は json() せず、text() を読んで原因をログに残す
+            if(!res.ok){
+                const t = await res.text().catch(() => "");
+                const err = new Error(`HTTP ${res.status} ${res.statusText}`);
+                err.status = res.status;
+                err.bodyText = t;
+                throw err;
+            }
+
+            return await res.json();
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    /**
+     * ポップアップ本体（ここが openPopup()）
+     *
+     * いまは /analyze が重くて 502 になりやすいので、
+     * - 失敗時の表示を改善
+     * - 固まらないようにタイムアウト
+     *
+     * さらに、CLIPを分離する場合は後半に /analyze_clip を追記するだけでOK。
+     */
     async function openPopup(name, score){
         const popup = document.getElementById("popup");
         const img = document.getElementById("popup-img");
@@ -632,8 +679,10 @@
         const sc = document.getElementById("popup-score");
         const text = document.getElementById("popup-text");
 
+        // Jinjaで埋め込まれる基準画像ファイル名（サーバ側のbase）
         const base = "{{ base }}";
 
+        // 基準画像が無ければ分析できない
         if (!base){
             sc.textContent = "—";
             text.textContent = "基準画像が選ばれていません。まず検索を実行してね📸";
@@ -641,12 +690,15 @@
             return;
         }
 
+        // まずは「その画像」を表示（あとでoverlayに差し替える）
         img.src = "/static/uploads/" + name;
         title.textContent = "詳細: " + name;
 
+        // UIを「分析中」にする
         sc.textContent = "分析中(Analyzing)…";
         text.innerHTML = '<span class="loading"><span class="dot"></span><span class="dot"></span><span class="dot"></span> 分析中(Analyzing)…</span>';
 
+        // バーは一旦ゼロ表示
         setBar("m-color", 0);
         setBar("m-bright", 0);
         setBar("m-struct", 0);
@@ -655,43 +707,105 @@
         popup.style.display = "flex";
 
         try{
-            const res = await fetch("/analyze", {
-                method: "POST",
-                headers: {"Content-Type":"application/json"},
-                body: JSON.stringify({ base: base, target: name })
-            });
+            // ここが「重い分析」。まずはタイムアウトを入れて固まらないようにする
+            // 502が出るなら timeout を短めにして「失敗したら諦める」UXにするのもアリ
+            const data = await fetchJsonWithTimeout(
+                "/analyze",
+                {
+                    method: "POST",
+                    headers: {"Content-Type":"application/json"},
+                    body: JSON.stringify({ base: base, target: name })
+                },
+                25000 // 25秒（まずはここ。/analyzeを軽量化したら短くできる）
+            );
 
-            const data = await res.json();
-
+            // overlay画像があれば差し替え
             if (data.overlay_url){
                 img.src = data.overlay_url;
             }
 
+            // 100点スコア
             if (data.score100 !== undefined){
                 sc.textContent = String(data.score100) + " / 100";
             } else {
                 sc.textContent = "—";
             }
 
+            // 説明文
             text.textContent = data.text || "説明が取得できませんでした。(The description could not be retrieved.)";
 
+            // 内訳バー
             if (data.metrics){
                 setBar("m-color", data.metrics.color);
                 setBar("m-bright", data.metrics.brightness);
                 setBar("m-struct", data.metrics.structure);
                 setBar("m-shape", data.metrics.shape);
+                
+                // --- CLIPは後追いで取得（遅くてもUIは止めない）---
+                if (clipNote) clipNote.textContent = "CLIP: 計算中…";
+
+                try{
+                    const clipData = await fetchJsonWithTimeout(
+                        "/analyze_clip",
+                        {
+                            method: "POST",
+                            headers: {"Content-Type":"application/json"},
+                            body: JSON.stringify({ base: base, target: name })
+                        },
+                        15000 // 15秒で諦める（ここ重要）
+                    );
+
+                    if (clipData && clipData.ok){
+                        setBar("m-clip", clipData.clip);
+                        if (clipNote) clipNote.textContent = `CLIP: ${clipData.clip} / 100`;
+                    } else {
+                        if (clipNote) clipNote.textContent = "CLIP: 失敗（スキップ）";
+                    }
+                } catch(e2){
+                    console.log("CLIP skipped:", e2);
+                    if (clipNote) clipNote.textContent = "CLIP: タイムアウト（スキップ）";
+                }
+
             }
+
+            // ---------------------------------------------
+            // （次の段階）CLIPを分離したらここに追記する
+            // /analyze_clip を作って、CLIPだけ後から更新する
+            //
+            // 例：
+            // const clip = await fetchJsonWithTimeout("/analyze_clip", {...}, 15000);
+            // setBar("m-clip", clip.clip);
+            // ---------------------------------------------
 
         }catch(e){
             sc.textContent = "—";
-            text.textContent = "分析に失敗しました（/analyze を確認してね）。";
-            console.error(e);
+
+            // 502などHTTPエラーの時、原因が見えるようにする
+            if (e && e.status){
+                text.textContent = `分析に失敗しました（HTTP ${e.status}）。サーバが混雑/重い可能性があります。`;
+                console.error("analyze failed:", e.status, e.bodyText || "");
+            } else if (e && e.name === "AbortError"){
+                text.textContent = "分析がタイムアウトしました（重い処理のため中断）。";
+                console.error("analyze timeout:", e);
+            } else {
+                text.textContent = "分析に失敗しました（/analyze を確認してね）。";
+                console.error("analyze error:", e);
+            }
         }
     }
 
+    /**
+     * 背景クリックで閉じる
+     */
     function closePopup(e){
-        document.getElementById("popup").style.display = "none";
+        if (e.target === e.currentTarget) {
+            forceClose();
+        }
     }
+
+    /**
+     * ×ボタンで強制クローズ（表示も初期化）
+     */
     function forceClose(){
         document.getElementById("popup").style.display = "none";
         document.getElementById("popup-img").src = "";
@@ -701,7 +815,11 @@
         setBar("m-bright", 0);
         setBar("m-struct", 0);
         setBar("m-shape", 0);
+        setBar("m-clip", 0);
+        const clipNote = document.getElementById("clip-note");
+        if (clipNote) clipNote.textContent = "CLIP: 未計算";
     }
+
 </script>
 
 </body>
