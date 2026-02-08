@@ -162,15 +162,23 @@ def _set_job(job_id, **kwargs):
 
 
 def clip_worker_loop():
+    print("🧠 CLIP worker started")
+
     while True:
         job_id, base_path, target_path = CLIP_QUEUE.get()
+        print(f"▶ CLIP job start {job_id}")
 
         _set_job(job_id, status="running")
+
         try:
+            print("⏳ loading model / computing...")
             sim = clip_similarity_once(base_path, target_path)
             clip100 = int(sim * 100)
-            _set_job(job_id, status="done", result={"clip": clip100}, error=None)
+            print(f"✅ CLIP done {clip100}")
+
+            _set_job(job_id, status="done", result={"clip": clip100})
         except Exception as e:
+            print("❌ CLIP error", e)
             _set_job(job_id, status="error", error=str(e))
         finally:
             CLIP_QUEUE.task_done()
