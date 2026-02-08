@@ -689,7 +689,7 @@
             return;
         }
 
-        setClipButtonState(false, "CLIP解析中…");
+        setClipButtonState(false, "CLIP解析中…（最大60秒）");
         if (clipNote) clipNote.textContent = "CLIP: 計算中…";
 
         try{
@@ -700,7 +700,7 @@
                     headers: {"Content-Type":"application/json"},
                     body: JSON.stringify({ base: currentBase, target: currentTarget })
                 },
-                20000 // 20秒：重いので少し長め（好みで調整）
+                60000 // 60秒：重いので少し長め（好みで調整）
             );
 
             if (clipData && clipData.ok){
