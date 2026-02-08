@@ -3,6 +3,8 @@ import os
 import uuid
 import cv2
 import numpy as np
+import requests
+
 
 # =============================
 # App / Folders
@@ -132,6 +134,139 @@ def get_edge_density(img):
 # =============================
 # Routes
 # =============================
+HF_BATCH_URL = "https://taku1103-clip-sim-api.hf.space/clip_sim_batch"
+TOP_K = 30  # ここを20〜30推奨
+W_OPENCV = 0.7
+W_CLIP = 0.3
+
+
+def opencv_to_0_100(hist_score: float) -> int:
+    # compareHist(CORREL) は -1..1 になり得るので 0..1 に寄せて 0..100
+    s01 = clamp01((float(hist_score) + 1.0) / 2.0) if hist_score < 0 else clamp01(float(hist_score))
+    return int(round(s01 * 100))
+
+
+@app.route("/search_api", methods=["POST"])
+def search_api():
+    """
+    JSからFormDataで呼ぶ：
+      - base: file (optional)
+      - prev_base: str (optional)
+      - folder: files (multiple)
+      - threshold: str
+    return JSON:
+      { ok, base, threshold, results:[{name, hist, clip, final, final100}] }
+    """
+    threshold = 0.4
+
+    # 1) params
+    prev_base = request.form.get("prev_base") or ""
+    prev_base = os.path.basename(prev_base) if prev_base else ""
+
+    try:
+        threshold = float(request.form.get("threshold", 0.4))
+    except Exception:
+        threshold = 0.4
+
+    base_file = request.files.get("base")
+    folder_files = request.files.getlist("folder")
+
+    # 2) base決定（アップロード or 前回維持）
+    if base_file and base_file.filename:
+        if not allowed_file(base_file.filename):
+            return jsonify({"ok": False, "error": "対応していない画像形式です😢"}), 400
+        ext = os.path.splitext(base_file.filename)[1].lower()
+        base_name = str(uuid.uuid4()) + ext
+        base_path = os.path.join(app.config["UPLOAD_FOLDER"], base_name)
+        base_file.save(base_path)
+    elif prev_base:
+        base_name = prev_base
+        base_path = os.path.join(app.config["UPLOAD_FOLDER"], base_name)
+        if not os.path.exists(base_path):
+            return jsonify({"ok": False, "error": "基準画像をもう一度選んでね📸"}), 400
+    else:
+        return jsonify({"ok": False, "error": "基準画像を選んでね📸"}), 400
+
+    base_hist = get_histogram(base_path)
+    if base_hist is None:
+        return jsonify({"ok": False, "error": "基準画像が壊れています😢"}), 400
+
+    # 3) OpenCVで一次フィルタ
+    candidates = []
+    for f in folder_files:
+        if not f or not f.filename:
+            continue
+        if not allowed_file(f.filename):
+            continue
+
+        ext = os.path.splitext(f.filename)[1].lower()
+        name = str(uuid.uuid4()) + ext
+        path = os.path.join(app.config["UPLOAD_FOLDER"], name)
+        f.save(path)
+
+        hist = get_histogram(path)
+        if hist is None:
+            continue
+
+        score = float(cv2.compareHist(base_hist, hist, cv2.HISTCMP_CORREL))
+        if score >= threshold:
+            candidates.append((name, score))
+
+    candidates.sort(key=lambda x: x[1], reverse=True)
+
+    # 4) TOP_KだけCLIPへ（候補0なら即返す）
+    top = candidates[:TOP_K]
+    clip_map = {name: 0 for name, _ in top}
+
+    if top:
+        try:
+            # base と targets を multipart で一括送信
+            files = []
+            files.append(("base", ("base.jpg", open(base_path, "rb"), "image/jpeg")))
+            for name, _ in top:
+                p = os.path.join(app.config["UPLOAD_FOLDER"], name)
+                files.append(("targets", (name, open(p, "rb"), "image/jpeg")))
+
+            # コールドスタート考慮で長め（必要なら調整）
+            resp = requests.post(HF_BATCH_URL, files=files, timeout=75)
+            data = resp.json() if resp.ok else None
+
+            if not data or not data.get("ok"):
+                raise RuntimeError(data.get("error") if isinstance(data, dict) else f"HF error HTTP {resp.status_code}")
+
+            for r in data.get("results", []):
+                clip_map[r.get("name")] = int(r.get("clip", 0))
+
+        except Exception as e:
+            # HFが死んでもOpenCV結果だけで返す（UX崩れない）
+            # ここを「エラーで止める」にしたければ return error に変えてもOK
+            print("HF batch failed:", e)
+
+    # 5) 合成して返却
+    out = []
+    for name, hist_score in candidates:
+        hist100 = opencv_to_0_100(hist_score)
+        clip100 = int(clip_map.get(name, 0))  # TOP_K外は0のまま
+        final100 = int(round(W_OPENCV * hist100 + W_CLIP * clip100))
+        out.append({
+            "name": name,
+            "hist": hist_score,     # -1..1 or 0..1
+            "hist100": hist100,     # 0..100
+            "clip": clip100,        # 0..100
+            "final100": final100    # 0..100
+        })
+
+    # finalで並べ替え（CLIP反映）
+    out.sort(key=lambda x: x["final100"], reverse=True)
+
+    return jsonify({
+        "ok": True,
+        "base": base_name,
+        "threshold": threshold,
+        "results": out
+    })
+
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     threshold = 0.4

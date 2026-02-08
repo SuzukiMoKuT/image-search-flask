@@ -458,62 +458,64 @@
                 </div>
                 <div class="bd">
 
-                    {% if base %}
-                    <div class="baseBox">
-                        <img src="/static/uploads/{{ base }}" alt="base">
-                        <div class="baseMeta">
-                            <b>基準画像 (Reference image)</b>
-                            <span>基準画像は保持されます（再選択しなくてOK）</span>
-                            <span>The reference image will be retained (no need to reselect it)</span>
-                            <span>しきい値 (Threshold): {{ "%.2f"|format(threshold | default(0.4)) }}</span>
+                    <div id="resultsArea">
+                        {% if base %}
+                        <div class="baseBox">
+                            <img src="/static/uploads/{{ base }}" alt="base">
+                            <div class="baseMeta">
+                                <b>基準画像 (Reference image)</b>
+                                <span>基準画像は保持されます（再選択しなくてOK）</span>
+                                <span>The reference image will be retained (no need to reselect it)</span>
+                                <span>しきい値 (Threshold): {{ "%.2f"|format(threshold | default(0.4)) }}</span>
+                            </div>
                         </div>
-                    </div>
-                    <div style="height:14px"></div>
-                        {% endif %}
+                        <div style="height:14px"></div>
+                            {% endif %}
 
-                        {% if results %}
-                        <div class="resultsGrid">
-                            {% for r in results %}
-                                {% set name = r[0] %}
-                                {% set score = r[1] %}
-                                {% set desc = (r[2] if (r|length > 2) else "") %}
-                                {% set bar = ((score + 1) / 2 if score < 0 else score) %}
-                                {% if bar < 0 %}{% set bar = 0 %}{% endif %}
-                                {% if bar > 1 %}{% set bar = 1 %}{% endif %}
+                            {% if results %}
+                            <div class="resultsGrid">
+                                {% for r in results %}
+                                    {% set name = r[0] %}
+                                    {% set score = r[1] %}
+                                    {% set desc = (r[2] if (r|length > 2) else "") %}
+                                    {% set bar = ((score + 1) / 2 if score < 0 else score) %}
+                                    {% if bar < 0 %}{% set bar = 0 %}{% endif %}
+                                    {% if bar > 1 %}{% set bar = 1 %}{% endif %}
 
-                                <div class="item"
-                                data-name="{{ name }}"
-                                data-score="{{ '%.6f'|format(score) }}"
-                                onclick="openPopupFromEl(this)"
-                                role="button" tabindex="0">
-                                    <img class="thumb" src="/static/uploads/{{ name }}" alt="result">
-                                    <div class="meta">
-                                        <div class="scoreLine">
-                                            <b>類似度 (Similarity)</b>
-                                            <span>{{ "%.3f"|format(score) }}</span>
-                                        </div>
-                                        <div class="bar"><div style="width: {{ (bar*100)|round(0) }}%;"></div></div>
+                                    <div class="item"
+                                    data-name="{{ name }}"
+                                    data-score="{{ '%.6f'|format(score) }}"
+                                    onclick="openPopupFromEl(this)"
+                                    role="button" tabindex="0">
+                                        <img class="thumb" src="/static/uploads/{{ name }}" alt="result">
+                                        <div class="meta">
+                                            <div class="scoreLine">
+                                                <b>類似度 (Similarity)</b>
+                                                <span>{{ "%.3f"|format(score) }}</span>
+                                            </div>
+                                            <div class="bar"><div style="width: {{ (bar*100)|round(0) }}%;"></div></div>
 
-                                            <div class="desc">
-                                                {% if desc %}
-                                                    {{ desc }}
-                                                {% else %}
-                                                    クリックで詳細を表示 (Click for details)
-                                                {% endif %}
+                                                <div class="desc">
+                                                    {% if desc %}
+                                                        {{ desc }}
+                                                    {% else %}
+                                                        クリックで詳細を表示 (Click for details)
+                                                    {% endif %}
+                                                </div>
                                             </div>
                                         </div>
-                                    </div>
-                            {% endfor %}
-                        </div>
-
-                        {% else %}
-                            <div class="empty">
-                                <b>まだ結果がありません (No results yet)</b><br>
-                                ① 基準画像を選ぶ (Select a reference image) → ② フォルダを選ぶ (Select a folder) → ③ 検索開始 (Start Search)<br>
-                                もし0件なら、しきい値を少し下げてみてね (If 0 results, try lowering the threshold a bit)
+                                {% endfor %}
                             </div>
-                        {% endif %}
 
+                            {% else %}
+                                <div class="empty">
+                                    <b>まだ結果がありません (No results yet)</b><br>
+                                    ① 基準画像を選ぶ (Select a reference image) → ② フォルダを選ぶ (Select a folder) → ③ 検索開始 (Start Search)<br>
+                                    もし0件なら、しきい値を少し下げてみてね (If 0 results, try lowering the threshold a bit)
+                                </div>
+                            {% endif %}
+
+                        </div>
                     </div>
                 </div>
 
