@@ -939,17 +939,154 @@
         area.innerHTML = `<div class="resultsGrid">${cards}</div>`;
     }
 
+    // =============================
+    // Client-side image compression (fix 413 on mobile)
+    // =============================
+
+    // 目標：スマホの巨大画像を /search_api に送る前に軽量化する
+    const CLIENT_MAX_SIDE = 1280;     // 768〜1280推奨（まずは1280で品質優先）
+    const CLIENT_JPEG_QUALITY = 0.82; // 0.75〜0.85推奨
+    const CLIENT_MAX_BYTES_PER_FILE = 1_000_000; // 1MB目標（必要なら増減）
+
+    function extToMime(name){
+        const lower = (name || "").toLowerCase();
+        if (lower.endsWith(".png")) return "image/png";
+        if (lower.endsWith(".webp")) return "image/webp";
+        if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+        return "image/jpeg";
+    }
+
+    // File -> HTMLImageElement (EXIF回転の厳密対応は省略。多くのブラウザは表示時に吸収します)
+    async function fileToImage(file){
+        const url = URL.createObjectURL(file);
+        try{
+            const img = new Image();
+            img.decoding = "async";
+            img.src = url;
+            await new Promise((resolve, reject) => {
+            img.onload = resolve;
+            img.onerror = reject;
+            });
+            return img;
+        } finally {
+            // revoke は onload 後にOK
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+    }
+
+    function calcResize(w, h, maxSide){
+        const m = Math.max(w, h);
+        if (m <= maxSide) return { w, h, scale: 1 };
+        const scale = maxSide / m;
+        return { w: Math.max(1, Math.round(w * scale)), h: Math.max(1, Math.round(h * scale)), scale };
+    }
+
+    async function canvasToBlob(canvas, mime, quality){
+        // safari対策：toBlobが無い場合はdataURL fallback
+        if (canvas.toBlob){
+            return await new Promise((resolve) => canvas.toBlob(resolve, mime, quality));
+        }
+        const dataUrl = canvas.toDataURL(mime, quality);
+        const res = await fetch(dataUrl);
+        return await res.blob();
+    }
+
+    // 画像を縮小して JPEG Blob にする（元がPNGでもJPEG化）
+    async function compressImageFileToJpegBlob(file, maxSide, quality){
+        const img = await fileToImage(file);
+        const { w, h } = calcResize(img.naturalWidth || img.width, img.naturalHeight || img.height, maxSide);
+
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d", { alpha: false });
+
+        // 背景白（透過PNG対策）
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, w, h);
+
+        ctx.drawImage(img, 0, 0, w, h);
+
+        let q = quality;
+        let blob = await canvasToBlob(canvas, "image/jpeg", q);
+
+        // まだ大きいなら quality を段階的に下げる
+        while (blob && blob.size > CLIENT_MAX_BYTES_PER_FILE && q > 0.55){
+            q = Math.max(0.55, q - 0.10);
+            blob = await canvasToBlob(canvas, "image/jpeg", q);
+        }
+        return blob;
+    }
+
+    // File[] を圧縮して File[] にして返す（ファイル名は .jpg に寄せる）
+    async function compressFiles(files, labelForLog){
+        const out = [];
+        for (const f of files){
+            if (!f) continue;
+
+            // 画像以外はスキップ
+            if (!f.type.startsWith("image/") && !extToMime(f.name).startsWith("image/")) continue;
+
+            try{
+            const blob = await compressImageFileToJpegBlob(f, CLIENT_MAX_SIDE, CLIENT_JPEG_QUALITY);
+
+            const newName = (f.name || "image").replace(/\.(png|webp|jpg|jpeg|bmp)$/i, "") + ".jpg";
+            const newFile = new File([blob], newName, { type: "image/jpeg" });
+
+            out.push(newFile);
+            } catch (e){
+            console.warn(`[compress] failed (${labelForLog})`, f.name, e);
+            // 圧縮失敗したら元ファイルのまま入れる（安全側）
+            out.push(f);
+            }
+        }
+        return out;
+    }
+
+    // 元フォームの値（threshold, prev_base等）を新FormDataにコピーしつつ、
+    // base/folder は圧縮済みファイルで差し替える
+    async function buildCompressedFormData(form){
+        const fd = new FormData();
+
+        // まず普通のフィールドをコピー（base/folderは後で差し替え）
+        for (const [k, v] of new FormData(form).entries()){
+            if (k === "base" || k === "folder") continue;
+            fd.append(k, v);
+    }
+
+    // base（任意）
+    const baseInput = form.querySelector('input[type="file"][name="base"]');
+    const baseFiles = baseInput ? Array.from(baseInput.files || []) : [];
+    if (baseFiles.length > 0){
+        const [compressedBase] = await compressFiles(baseFiles.slice(0, 1), "base");
+        if (compressedBase) fd.append("base", compressedBase, compressedBase.name);
+    } else {
+        // base未選択なら prev_base で継続（あなたの実装通り）
+    }
+
+    // folder（複数必須）
+    const folderInput = form.querySelector('input[type="file"][name="folder"]');
+    const folderFiles = folderInput ? Array.from(folderInput.files || []) : [];
+    const compressedFolder = await compressFiles(folderFiles, "folder");
+    for (const f of compressedFolder){
+        fd.append("folder", f, f.name);
+    }
+
+    return fd;
+}
+
     (function hookSearchForm(){
         const form = document.getElementById("searchForm");
         if(!form) return;
 
         form.addEventListener("submit", async (e) => {
             e.preventDefault();
-
             showOverlay(true);
 
             try{
-                const fd = new FormData(form);
+                // ★ここがポイント：圧縮してから送る
+                const fd = await buildCompressedFormData(form);
+
                 const res = await fetch("/search_api", { method:"POST", body: fd });
                 const data = await res.json().catch(() => null);
 
@@ -970,6 +1107,7 @@
             }
         });
     })();
+
 </script>
 
 <div id="searchOverlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:99999; align-items:center; justify-content:center;">
