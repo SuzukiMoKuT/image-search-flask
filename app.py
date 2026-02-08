@@ -488,6 +488,9 @@ def analyze():
 def clip_start():
     _cleanup_jobs()
 
+    if _count_running_jobs() >= MAX_RUNNING_JOBS:
+        return jsonify({"ok": False, "error": "server busy"}), 429
+
     data = request.json or {}
     base = data.get("base")
     target = data.get("target")
@@ -516,6 +519,13 @@ def clip_start():
     t.start()
 
     return jsonify({"ok": True, "job_id": job_id})
+
+# 追加：同時に動かすCLIPジョブ数を制限
+MAX_RUNNING_JOBS = 1
+
+def _count_running_jobs():
+    with CLIP_JOBS_LOCK:
+        return sum(1 for j in CLIP_JOBS.values() if j["status"] in ("queued", "running"))
 
 
 @app.route("/clip_status/<job_id>", methods=["GET"])

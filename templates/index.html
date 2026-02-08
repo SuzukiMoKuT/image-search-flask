@@ -788,7 +788,7 @@
             // status取得が失敗しても、次のポーリングで回復できるので黙って続行
             console.log("clip_status transient error:", e);
             }
-        }, 2000);
+        }, 5000);
     }
 
 
@@ -798,8 +798,6 @@
      * いまは /analyze が重くて 502 になりやすいので、
      * - 失敗時の表示を改善
      * - 固まらないようにタイムアウト
-     *
-     * さらに、CLIPを分離する場合は後半に /analyze_clip を追記するだけでOK。
      */
     async function openPopup(name, score){
         const popup = document.getElementById("popup");
@@ -880,15 +878,6 @@
                 setBar("m-struct", data.metrics.structure);
                 setBar("m-shape", data.metrics.shape);
             }
-
-            // ---------------------------------------------
-            // （次の段階）CLIPを分離したらここに追記する
-            // /analyze_clip を作って、CLIPだけ後から更新する
-            //
-            // 例：
-            // const clip = await fetchJsonWithTimeout("/analyze_clip", {...}, 15000);
-            // setBar("m-clip", clip.clip);
-            // ---------------------------------------------
 
         } catch(e){
             sc.textContent = "—";
