@@ -41,6 +41,40 @@ _clip_device = "cpu"
 CLIP_AVAILABLE = None  # 未判定
 
 
+def clip_similarity_once(base_path: str, target_path: str) -> float:
+    """
+    1リクエスト内でCLIPモデルを1回だけロードして2枚をエンコードする（超重要）
+    """
+    global CLIP_AVAILABLE
+    if CLIP_AVAILABLE is None:
+        CLIP_AVAILABLE = _try_import_clip()
+    if not CLIP_AVAILABLE:
+        raise RuntimeError("CLIP is not available")
+
+    model, preprocess, device = _load_clip()
+    try:
+        import torch
+        with torch.inference_mode():
+            b = preprocess(Image.open(base_path)).unsqueeze(0).to(device)
+            t = preprocess(Image.open(target_path)).unsqueeze(0).to(device)
+
+            bf = model.encode_image(b)
+            tf = model.encode_image(t)
+
+            bf = bf / bf.norm(dim=-1, keepdim=True)
+            tf = tf / tf.norm(dim=-1, keepdim=True)
+
+            sim = float((bf @ tf.T).item())
+            return clamp01(sim)
+    finally:
+        # 解放（無料枠向け）
+        try:
+            del model, preprocess
+        except Exception:
+            pass
+        gc.collect()
+
+
 def _try_import_clip():
     """起動時に重くしないため、必要になった時だけimportする"""
     try:
@@ -310,11 +344,8 @@ def analyze():
     # --- CLIP類似度（0..1目安） ---
     clip_sim = 0.0
     try:
-        base_feat = get_clip_feature(base_path)
-        target_feat = get_clip_feature(target_path)
-        clip_sim = clamp01(float((base_feat @ target_feat.T).item()))
+        clip_sim = clip_similarity_once(base_path, target_path)
     except Exception as e:
-        # CLIPが無い/重くて失敗してもアプリは落とさない
         print("⚠️ CLIP失敗:", e)
         clip_sim = 0.0
 
