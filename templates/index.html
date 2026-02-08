@@ -671,7 +671,7 @@
         }
     }
 
-    // ポップアップで選択中の画像（runClipAnalysisが参照する）
+    // ポップアップで選択中の画像
     let currentBase = null;
     let currentTarget = null;
 
@@ -682,113 +682,139 @@
         btn.textContent = label || (enabled ? "🧠 CLIP解析（重い）" : "CLIP解析中…");
     }
 
-    // Jobポーリング用
-    let clipJobTimer = null;
+    // ---- CLIP Job polling (setTimeout版) ----
     let clipJobId = null;
+    let clipPollTimer = null;     // setTimeout のID
+    let clipPollStop = false;     // 停止フラグ（forceCloseで止める）
 
-    // 前のCLIPポーリングが残ってたら止める
-    if (clipJobTimer){
-        clearInterval(clipJobTimer);
-        clipJobTimer = null;
+    function stopClipPolling(){
+        clipPollStop = true;
+        if (clipPollTimer){
+            clearTimeout(clipPollTimer);
+            clipPollTimer = null;
+        }
+        clipJobId = null;
     }
-    clipJobId = null;
-    setClipButtonState(true, "🧠 CLIP解析（重い）");
+
+    function scheduleNextPoll(ms){
+        if (clipPollStop) return;
+        const wait = Math.max(800, Math.min(10000, Number(ms) || 3000)); // 0.8〜10秒にクランプ
+        clipPollTimer = setTimeout(pollClipStatusOnce, wait);
+    }
+
+    async function pollClipStatusOnce(){
+        const clipNote = document.getElementById("clip-note");
+        if (clipPollStop || !clipJobId) return;
+
+        try{
+            // GET /clip_status/<job_id>
+            const st = await fetchJsonWithTimeout(`/clip_status/${clipJobId}`, { method: "GET" }, 8000);
+
+            if(!st || !st.ok){
+                // 一時失敗は次回で拾う
+                scheduleNextPoll(4000);
+                return;
+            }
+
+            if(st.status === "queued"){
+                if (clipNote) clipNote.textContent = "CLIP: 待機中…";
+                scheduleNextPoll(st.next_poll_ms || 4000);
+                return;
+            }
+
+            if(st.status === "running"){
+                if (clipNote) clipNote.textContent = "CLIP: 計算中…";
+                scheduleNextPoll(st.next_poll_ms || 4000);
+                return;
+            }
+
+            if(st.status === "done"){
+                const clip = st.result?.clip ?? 0;
+                setBar("m-clip", clip);
+                if (clipNote) clipNote.textContent = `CLIP: ${clip} / 100`;
+                setClipButtonState(true, "🧠 CLIP解析（重い）");
+                stopClipPolling();
+                return;
+            }
+
+            if(st.status === "error"){
+                if (clipNote) clipNote.textContent = "CLIP: 失敗（サーバ側エラー）";
+                console.error("clip job error:", st.error);
+                setClipButtonState(true, "🧠 CLIP解析（重い）");
+                stopClipPolling();
+                return;
+            }
+
+            // 想定外
+            scheduleNextPoll(4000);
+
+        }catch(e){
+            // 503などの一時障害は “間隔を伸ばして” 継続（ここが肝）
+            console.log("clip_status transient error:", e);
+
+            const clipNote = document.getElementById("clip-note");
+            if (clipNote) clipNote.textContent = "CLIP: 確認中…（サーバ混雑）";
+
+            scheduleNextPoll(7000);
+        }
+    }
 
     async function runClipAnalysis(){
         const clipNote = document.getElementById("clip-note");
+
         if (!currentBase || !currentTarget){
             if (clipNote) clipNote.textContent = "CLIP: 対象が未選択";
             return;
         }
 
-        // 二重起動防止
-        if (clipJobTimer){
-            clearInterval(clipJobTimer);
-            clipJobTimer = null;
-        }
-        clipJobId = null;
+        // 既存ポーリング停止（二重起動防止）
+        stopClipPolling();
+        clipPollStop = false;
 
         setClipButtonState(false, "CLIP解析開始…");
         if (clipNote) clipNote.textContent = "CLIP: ジョブ開始中…";
         setBar("m-clip", 0);
 
-        // 1) Job開始（即返る）
-        let start;
+        // 1) start
         try{
-            start = await fetchJsonWithTimeout(
+            const start = await fetchJsonWithTimeout(
                 "/clip_start",
                 {
                     method: "POST",
                     headers: {"Content-Type":"application/json"},
                     body: JSON.stringify({ base: currentBase, target: currentTarget })
-            },
-            8000
-        );
-    }catch(e){
-        console.error("clip_start failed:", e);
-        if (clipNote) clipNote.textContent = "CLIP: 開始失敗";
-        setClipButtonState(true, "🧠 CLIP解析（重い）");
-        return;
-    }
+                },
+                8000
+            );
 
-    if(!start || !start.ok || !start.job_id){
-        if (clipNote) clipNote.textContent = "CLIP: 開始失敗（job_idなし）";
-        setClipButtonState(true, "🧠 CLIP解析（重い）");
-        return;
-    }
+            if(!start || !start.ok || !start.job_id){
+                if (clipNote) clipNote.textContent = "CLIP: 開始失敗（job_idなし）";
+                setClipButtonState(true, "🧠 CLIP解析（重い）");
+                return;
+            }
 
-    clipJobId = start.job_id;
-    if (clipNote) clipNote.textContent = "CLIP: 計算中…（進捗確認中）";
-    setClipButtonState(false, "CLIP解析中…");
+            clipJobId = start.job_id;
+            if (clipNote) clipNote.textContent = "CLIP: 計算中…（進捗確認中）";
+            setClipButtonState(false, "CLIP解析中…");
 
-    // 2) 2秒おきにステータス確認
-    const startedAt = Date.now();
-    const MAX_WAIT_MS = 5 * 60 * 1000; // 5分まで待つ（好きに調整）
+            // 2) 最初のポーリング（最初は少し待ってから）
+            scheduleNextPoll(2000);
 
-    clipJobTimer = setInterval(async () => {
-        // タイムアウト（永遠に待たない）
-        if (Date.now() - startedAt > MAX_WAIT_MS){
-            clearInterval(clipJobTimer);
-            clipJobTimer = null;
-            if (clipNote) clipNote.textContent = "CLIP: 時間がかかりすぎたので停止（後でもう一度）";
+        }catch(e){
+            // 429(server busy) を分けて案内すると親切
+            if (e && e.status === 429){
+                if (clipNote) clipNote.textContent = "CLIP: サーバが混雑中。少し待ってもう一度！";
+            } else if (e && e.status){
+                if (clipNote) clipNote.textContent = `CLIP: 開始失敗（HTTP ${e.status}）`;
+            } else if (e && e.name === "AbortError"){
+                if (clipNote) clipNote.textContent = "CLIP: 開始タイムアウト";
+            } else {
+                if (clipNote) clipNote.textContent = "CLIP: 開始失敗";
+            }
+            console.error("clip_start failed:", e);
             setClipButtonState(true, "🧠 CLIP解析（重い）");
-            return;
+            stopClipPolling();
         }
-
-        try{
-            const st = await fetchJsonWithTimeout(`/clip_status/${clipJobId}`, { method: "GET" }, 8000);
-
-            if(!st || !st.ok){
-                return; // たまに失敗しても次で拾う
-            }
-
-            if(st.status === "queued"){
-                if (clipNote) clipNote.textContent = "CLIP: 待機中…";
-            }else if(st.status === "running"){
-                if (clipNote) clipNote.textContent = "CLIP: 計算中…";
-            }else if(st.status === "done"){
-                clearInterval(clipJobTimer);
-                clipJobTimer = null;
-
-                const clip = st.result?.clip ?? 0;
-                setBar("m-clip", clip);
-                if (clipNote) clipNote.textContent = `CLIP: ${clip} / 100`;
-
-                setClipButtonState(true, "🧠 CLIP解析（重い）");
-            }else if(st.status === "error"){
-                clearInterval(clipJobTimer);
-                clipJobTimer = null;
-
-                if (clipNote) clipNote.textContent = "CLIP: 失敗（サーバ側エラー）";
-                console.error("clip job error:", st.error);
-
-                setClipButtonState(true, "🧠 CLIP解析（重い）");
-            }
-            }catch(e){
-            // status取得が失敗しても、次のポーリングで回復できるので黙って続行
-            console.log("clip_status transient error:", e);
-            }
-        }, 5000);
     }
 
 
@@ -820,11 +846,14 @@
         currentBase = base;
         currentTarget = name;
 
+        // ★重要：前回のポーリングを止める
+        stopClipPolling();
+
+        // CLIP UI初期化
         setBar("m-clip", 0);
         const clipNote = document.getElementById("clip-note");
         if (clipNote) clipNote.textContent = "CLIP: 未実行";
         setClipButtonState(true, "🧠 CLIP解析（重い）");
-
 
 
         // まずは「その画像」を表示（あとでoverlayに差し替える）
@@ -931,6 +960,10 @@
             clipJobTimer = null;
         }
         clipJobId = null;
+        setClipButtonState(true, "🧠 CLIP解析（重い）");
+
+        // ★重要：閉じる時も止める
+        stopClipPolling();
         setClipButtonState(true, "🧠 CLIP解析（重い）");
     }
 
