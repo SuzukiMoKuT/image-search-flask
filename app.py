@@ -98,7 +98,7 @@ def _load_clip():
         pass
 
     device = "cpu"
-    model, preprocess = clip.load("ViT-B/32", device=device, jit=False)
+    model, preprocess = clip.load("RN50", device=device, jit=False)
     model.eval()
     return model, preprocess, device
 
