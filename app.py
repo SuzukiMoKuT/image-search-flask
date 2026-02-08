@@ -541,24 +541,5 @@ def clip_status(job_id):
 
     return jsonify(payload)
 
-
-@app.route("/analyze_clip", methods=["POST"])
-def analyze_clip():
-    data = request.json or {}
-    base = data.get("base")
-    target = data.get("target")
-    if not base or not target:
-        return jsonify({"ok": False, "clip": 0})
-
-    base_path = os.path.join(app.config["UPLOAD_FOLDER"], os.path.basename(base))
-    target_path = os.path.join(app.config["UPLOAD_FOLDER"], os.path.basename(target))
-
-    try:
-        sim = clip_similarity_once(base_path, target_path)  # 0..1
-        return jsonify({"ok": True, "clip": int(sim * 100)})
-    except Exception as e:
-        print("⚠️ /analyze_clip 失敗:", e)
-        return jsonify({"ok": False, "clip": 0})
-
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)

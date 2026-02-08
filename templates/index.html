@@ -686,6 +686,14 @@
     let clipJobTimer = null;
     let clipJobId = null;
 
+    // 前のCLIPポーリングが残ってたら止める
+    if (clipJobTimer){
+        clearInterval(clipJobTimer);
+        clipJobTimer = null;
+    }
+    clipJobId = null;
+    setClipButtonState(true, "🧠 CLIP解析（重い）");
+
     async function runClipAnalysis(){
         const clipNote = document.getElementById("clip-note");
         if (!currentBase || !currentTarget){
