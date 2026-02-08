@@ -344,10 +344,22 @@ def analyze():
     base_path = os.path.join(app.config["UPLOAD_FOLDER"], os.path.basename(base))
     target_path = os.path.join(app.config["UPLOAD_FOLDER"], os.path.basename(target))
 
+    if not os.path.exists(base_path) or not os.path.exists(target_path):
+        return jsonify({
+            "text": f"解析対象が見つかりませんでした😢 (base_exists={os.path.exists(base_path)}, target_exists={os.path.exists(target_path)})",
+            "debug": {"base": os.path.basename(base), "target": os.path.basename(target)},
+        })
+
     bimg = cv2.imread(base_path)
     timg = cv2.imread(target_path)
     if bimg is None or timg is None:
         return jsonify({"text": "画像を読み込めませんでした😢"})
+    
+    if bimg is None or timg is None:
+        return jsonify({
+            "text": "画像を読み込めませんでした😢（形式が特殊/破損の可能性）",
+            "debug": {"base_path": base_path, "target_path": target_path}
+        })
 
     # 色
     bh = get_histogram(base_path)

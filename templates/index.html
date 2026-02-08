@@ -751,8 +751,10 @@
         const sc = document.getElementById("popup-score");
         const text = document.getElementById("popup-text");
 
-        // Jinjaで埋め込まれる基準画像ファイル名（サーバ側のbase）
-        const base = "{{ base }}";
+        // ★基準画像は hidden prev_base から読む（JS検索と整合する唯一の真実）
+        const baseInput = document.querySelector('input[name="prev_base"]');
+        const base = (baseInput ? baseInput.value : "").trim();
+
 
         // 基準画像が無ければ分析できない
         if (!base){
