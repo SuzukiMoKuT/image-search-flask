@@ -886,17 +886,25 @@
         const prev = document.querySelector('input[name="prev_base"]');
         if(prev) prev.value = baseName;
 
-        // 基準画像表示の差し替え（ページ内に baseBox がある前提）
-        // もしベース表示がJSで無いなら、ここは無理に触らなくてOK
-        const baseImg = document.querySelector(".baseBox img");
-        if(baseImg) baseImg.src = "/static/uploads/" + baseName;
-
-        // resultsArea を作って上書き
         const area = document.getElementById("resultsArea");
         if(!area) return;
 
+        // 基準画像ブロック（常に上に表示）
+        const baseHtml = `
+            <div class="baseBox">
+                <img src="/static/uploads/${baseName}" alt="base">
+                <div class="baseMeta">
+                    <b>基準画像 (Reference image)</b>
+                    <span>基準画像は保持されます（再選択しなくてOK）</span>
+                    <span>The reference image will be retained (no need to reselect it)</span>
+                    <span>しきい値 (Threshold): ${Number(threshold).toFixed(2)}</span>
+                </div>
+            </div>
+            <div style="height:14px"></div>
+        `;
+
         if(!results || results.length === 0){
-            area.innerHTML = `
+            area.innerHTML = baseHtml + `
                 <div class="empty">
                     <b>0件でした</b><br>
                     しきい値を下げてみてね（Threshold: ${Number(threshold).toFixed(2)}）
@@ -908,10 +916,8 @@
         const cards = results.map(r => {
             const name = r.name;
             const final100 = r.final100 ?? 0;
-            // 表示用のバー幅
             const bar = Math.max(0, Math.min(100, final100));
 
-            // data-score は openPopupFromEl が読む（今は使ってなくてもOK）
             return `
                 <div class="item"
                     data-name="${name}"
@@ -933,10 +939,10 @@
                         </div>
                     </div>
                 </div>
-            `;
-        }).join("");
+                `;
+            }).join("");
 
-        area.innerHTML = `<div class="resultsGrid">${cards}</div>`;
+        area.innerHTML = baseHtml + `<div class="resultsGrid">${cards}</div>`;
     }
 
     // =============================
@@ -944,7 +950,7 @@
     // =============================
 
     // 目標：スマホの巨大画像を /search_api に送る前に軽量化する
-    const CLIENT_MAX_SIDE = 1024   // 768〜1280推奨（まずは1024で品質優先）
+    const CLIENT_MAX_SIDE = 768   // 768〜1280推奨（まずは1024で品質優先）
     const CLIENT_JPEG_QUALITY = 0.72// 0.75〜0.85推奨
     const CLIENT_MAX_BYTES_PER_FILE = 450_000; // 450KB目標
 
