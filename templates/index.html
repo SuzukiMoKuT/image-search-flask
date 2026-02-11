@@ -413,19 +413,19 @@
                     </div>
 
                     <div class="field">
-                        <label>🎯 類似度しきい値</label>
-                        <label>Similarity Threshold</label>
+                        <label>🎯 スコアで絞り込み (0〜100)</label>
+                        <label>Filter by score (0-100)</label>
                         <div class="slider">
                             <input type="range"
-                                name="threshold"
-                                min="0" max="1" step="0.01"
-                                value="{{ threshold | default(0.4) }}"
-                                oninput="syncThreshold(this.value)">
-                            <input type="number"
-                                id="thNum"
-                                min="0" max="1" step="0.01"
-                                value="{{ threshold | default(0.4) }}"
-                                oninput="syncThreshold(this.value, true)">
+                            id="thRange"
+                            min="0" max="100" step="1"
+                            value="{{ ((threshold | default(0.4)) * 100) | round(0) }}"
+                            oninput="syncThreshold(this.value)">
+                        <input type="number"
+                            id="thNum"
+                            min="0" max="100" step="1"
+                            value="{{ ((threshold | default(0.4)) * 100) | round(0) }}"
+                            oninput="syncThreshold(this.value)">
                         </div>
                         <div class="hint">
                             <span>ゆるめ（結果多め）Looser</span>
@@ -433,12 +433,12 @@
                         </div>
 
                         <div class="pillbar">
-                            <div class="pill" onclick="bumpThreshold(-0.05)">−0.05</div>
-                            <div class="pill" onclick="bumpThreshold(-0.10)">−0.10</div>
-                            <div class="pill" onclick="bumpThreshold(+0.05)">＋0.05</div>
-                            <div class="pill" onclick="bumpThreshold(+0.10)">＋0.10</div>
-                            <div class="pill" onclick="setThreshold(0.40)">おすすめ(Recomended): 0.40</div>
-                            <div class="pill" onclick="setThreshold(0.70)">おすすめ(Recomended): 0.70</div>
+                            <div class="pill" onclick="bumpThreshold(-5)">−5</div>
+                            <div class="pill" onclick="bumpThreshold(-10)">−10</div>
+                            <div class="pill" onclick="bumpThreshold(+5)">＋5</div>
+                            <div class="pill" onclick="bumpThreshold(+10)">＋10</div>
+                            <div class="pill" onclick="setThreshold(40)">おすすめ(Recomended): 40</div>
+                            <div class="pill" onclick="setThreshold(70)">おすすめ(Recomended): 70</div>
                         </div>
                     </div>
 
@@ -602,33 +602,37 @@
         applyTheme(saved);
     })();
 
-    // Threshold sync
-    function clamp01(x){
+    // Score sync (0..100)
+    function clampScore(x){
         x = Number(x);
-        if (isNaN(x)) return 0.4;
+        if (isNaN(x)) return 40;
         if (x < 0) return 0;
-        if (x > 1) return 1;
-        return Math.round(x * 100) / 100;
+        if (x > 100) return 100;
+        return Math.round(x);
     }
-    function syncThreshold(v, fromNum=false){
-        const val = clamp01(v);
-        const form = document.getElementById("searchForm");
-        const range = form.querySelector('input[type="range"][name="threshold"]');
-        const num = document.getElementById("thNum");
-        range.value = val;
-        num.value = val;
 
-        lastThreshold = val;
+    function syncThreshold(v){
+        const val = clampScore(v);
+
+        const range = document.getElementById("thRange");
+        const num = document.getElementById("thNum");
+        if (range) range.value = val;
+        if (num) num.value = val;
+
+        lastThreshold = val; // ★ここから lastThreshold は 0..100
+
         if (lastAllResults && lastBaseName){
             applyFilterAndRender();
         }
     }
+
     function bumpThreshold(delta){
         const num = document.getElementById("thNum");
-        syncThreshold(clamp01(Number(num.value) + delta), true);
+        syncThreshold(clampScore(Number(num.value) + delta));
     }
+
     function setThreshold(v){
-        syncThreshold(v, true);
+        syncThreshold(v);
     }
 
     // -----------------------------
@@ -912,15 +916,16 @@
 
     function applyFilterAndRender(){
         const mode = (document.getElementById("filter_mode")?.value || "final");
-        const th100 = Math.round(Number(lastThreshold) * 100);
+        const th = clampScore(lastThreshold);
 
         const filtered = (lastAllResults || []).filter(r => {
             const v = (mode === "opencv") ? (r.hist100 ?? 0) : (r.final100 ?? 0);
-            return v >= th100;
+            return v >= th;
         });
 
-        renderResults(lastBaseName, lastThreshold, filtered);
+        renderResults(lastBaseName, th, filtered);
     }
+
 
     function showOverlay(show){
         const o = document.getElementById("searchOverlay");
@@ -1112,11 +1117,19 @@
     async function buildCompressedFormData(form){
         const fd = new FormData();
 
-        // まず普通のフィールドをコピー（base/folderは後で差し替え）
-        for (const [k, v] of new FormData(form).entries()){
-            if (k === "base" || k === "folder") continue;
-            fd.append(k, v);
+    for (const [k, v] of new FormData(form).entries()){
+        if (k === "base" || k === "folder") continue;
+
+        if (k === "threshold"){
+            const score = clampScore(v);           // 0..100
+            const th01 = (score / 100).toFixed(2); // 0..1
+            fd.append("threshold", th01);
+            continue;
+        }
+
+        fd.append(k, v);
     }
+
 
     // base（任意）
     const baseInput = form.querySelector('input[type="file"][name="base"]');
@@ -1162,7 +1175,7 @@
                 }
 
                 lastBaseName = data.base;
-                lastThreshold = data.threshold;
+                lastThreshold = Math.round((Number(data.threshold) || 0.4) * 100);
 
                 // ★サーバが返した全件を保持（results_all が無ければ results を使う）
                 lastAllResults = data.results_all || data.results || [];
