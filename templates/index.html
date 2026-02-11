@@ -398,6 +398,7 @@
 
                 <form method="POST" enctype="multipart/form-data" id="searchForm">
                     <input type="hidden" name="prev_base" value="{{ base }}">
+                    <input type="hidden" name="filter_mode" id="filter_mode" value="final">
 
                     <div class="field">
                         <label>基準画像（未選択なら前回のまま）</label>
@@ -453,7 +454,11 @@
                 <div class="hd">
                     <div class="title">
                         <b>検索結果<br>Results</b>
-                        <span>クリックで拡大 + 説明</span>
+                        <span>クリックで拡大 + 説明<br>Click to enlarge + Description</span>
+                    </div>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <button class="pill" type="button" id="mode-final" onclick="setFilterMode('final')">総合で絞る</button>
+                        <button class="pill" type="button" id="mode-opencv" onclick="setFilterMode('opencv')">OpenCVで絞る</button>
                     </div>
                 </div>
                 <div class="bd">
@@ -612,6 +617,11 @@
         const num = document.getElementById("thNum");
         range.value = val;
         num.value = val;
+
+        lastThreshold = val;
+        if (lastAllResults && lastBaseName){
+            applyFilterAndRender();
+        }
     }
     function bumpThreshold(delta){
         const num = document.getElementById("thNum");
@@ -875,6 +885,43 @@
         if (clipNote) clipNote.textContent = "CLIP: 未計算 (Uncalculated)";
     }
 
+    // =============================
+    // Filter mode (final / opencv) + instant re-render
+    // =============================
+    let lastAllResults = null;   // サーバが返した全件（results_all）
+    let lastBaseName = null;
+    let lastThreshold = 0.4;
+
+    function setFilterMode(mode){
+        const hid = document.getElementById("filter_mode");
+        if (hid) hid.value = mode;
+
+        // 見た目（押してる方を濃く）
+        const b1 = document.getElementById("mode-final");
+        const b2 = document.getElementById("mode-opencv");
+        if (b1 && b2){
+            b1.style.opacity = (mode === "final") ? "1" : "0.6";
+            b2.style.opacity = (mode === "opencv") ? "1" : "0.6";
+        }
+
+        // 既に結果があるなら即再描画（再検索なし）
+        if (lastAllResults && lastBaseName){
+            applyFilterAndRender();
+        }
+    }
+
+    function applyFilterAndRender(){
+        const mode = (document.getElementById("filter_mode")?.value || "final");
+        const th100 = Math.round(Number(lastThreshold) * 100);
+
+        const filtered = (lastAllResults || []).filter(r => {
+            const v = (mode === "opencv") ? (r.hist100 ?? 0) : (r.final100 ?? 0);
+            return v >= th100;
+        });
+
+        renderResults(lastBaseName, lastThreshold, filtered);
+    }
+
     function showOverlay(show){
         const o = document.getElementById("searchOverlay");
         if(!o) return;
@@ -882,6 +929,9 @@
     }
 
     function renderResults(baseName, threshold, results){
+        const mode = (document.getElementById("filter_mode")?.value || "final");
+        const isOpenCV = (mode === "opencv");
+
         // hidden prev_base 更新（次回も基準画像維持できる）
         const prev = document.querySelector('input[name="prev_base"]');
         if(prev) prev.value = baseName;
@@ -898,6 +948,7 @@
                     <span>基準画像は保持されます（再選択しなくてOK）</span>
                     <span>The reference image will be retained (no need to reselect it)</span>
                     <span>しきい値 (Threshold): ${Number(threshold).toFixed(2)}</span>
+                    <span>絞り込み: ${isOpenCV ? "OpenCV(hist100)" : "総合(final100)"} </span>
                 </div>
             </div>
             <div style="height:14px"></div>
@@ -915,8 +966,17 @@
 
         const cards = results.map(r => {
             const name = r.name;
-            const final100 = r.final100 ?? 0;
-            const bar = Math.max(0, Math.min(100, final100));
+
+            // ★モードに合わせて表示値を切り替える
+            const main100 = isOpenCV ? (r.hist100 ?? 0) : (r.final100 ?? 0);
+            const bar = Math.max(0, Math.min(100, main100));
+
+            const title = isOpenCV ? "OpenCVで絞り込み" : "総合 (OpenCV+CLIP)";
+            const right = `${main100} / 100`;
+
+            const desc = isOpenCV
+                ? `OpenCV:${r.hist100 ?? 0}（参考: 総合:${r.final100 ?? 0} / CLIP:${r.clip ?? 0}）`
+                : `OpenCV:${r.hist100 ?? 0} / CLIP:${r.clip ?? 0}`;
 
             return `
                 <div class="item"
@@ -930,17 +990,15 @@
                     <img class="thumb" src="/static/uploads/${name}" alt="result">
                     <div class="meta">
                         <div class="scoreLine">
-                            <b>総合 (OpenCV+CLIP)</b>
-                            <span>${final100} / 100</span>
+                            <b>${title}</b>
+                            <span>${right}</span>
                         </div>
                         <div class="bar"><div style="width:${bar}%;"></div></div>
-                        <div class="desc">
-                            OpenCV:${r.hist100 ?? 0} / CLIP:${r.clip ?? 0}
-                        </div>
+                        <div class="desc">${desc}</div>
                     </div>
                 </div>
-                `;
-            }).join("");
+            `;
+        }).join("");
 
         area.innerHTML = baseHtml + `<div class="resultsGrid">${cards}</div>`;
     }
@@ -1103,7 +1161,18 @@
                     return;
                 }
 
-                renderResults(data.base, data.threshold, data.results);
+                lastBaseName = data.base;
+                lastThreshold = data.threshold;
+
+                // ★サーバが返した全件を保持（results_all が無ければ results を使う）
+                lastAllResults = data.results_all || data.results || [];
+
+                // まずはフィルタ適用して描画
+                applyFilterAndRender();
+
+                // トグル見た目を初期化
+                setFilterMode(document.getElementById("filter_mode")?.value || "final");
+
                 showOverlay(false);
 
             } catch(err){
@@ -1113,6 +1182,11 @@
             }
         });
     })();
+
+    // ページ初期表示でトグル見た目だけ整える
+    window.addEventListener("load", () => {
+        setFilterMode(document.getElementById("filter_mode")?.value || "final");
+    });
 
 </script>
 
