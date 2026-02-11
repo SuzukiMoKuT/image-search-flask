@@ -191,9 +191,10 @@ def search_api():
       - base: file (optional)
       - prev_base: str (optional)
       - folder: files (multiple)
-      - threshold: str
+      - threshold: str (0..1)
+      - filter_mode: "final" or "opencv"
     return JSON:
-      { ok, base, threshold, results:[{name, hist, clip, final, final100}] }
+      { ok, base, threshold, mode, results, results_all }
     """
     threshold = 0.4
 
@@ -205,6 +206,12 @@ def search_api():
         threshold = float(request.form.get("threshold", 0.4))
     except Exception:
         threshold = 0.4
+
+    mode = request.form.get("filter_mode", "final")
+    if mode not in ("final", "opencv"):
+        mode = "final"
+
+    threshold100 = int(round(threshold * 100))
 
     base_file = request.files.get("base")
     folder_files = request.files.getlist("folder")
@@ -229,7 +236,7 @@ def search_api():
     if base_hist is None:
         return jsonify({"ok": False, "error": "基準画像が壊れています😢"}), 400
 
-    # 3) OpenCVで一次フィルタ
+    # 3) OpenCVで候補を作る（ここは threshold の一次フィルタとして残す）
     candidates = []
     for f in folder_files:
         if not f or not f.filename:
@@ -262,51 +269,58 @@ def search_api():
             files = []
             files.append(("base", ("base.jpg", clip_normalize_to_jpeg_bytes(base_path), "image/jpeg")))
 
+            # ✅ targets は「正規化JPEG bytes」だけ送る（2重送信しない）
             for name, _ in top:
                 p = os.path.join(app.config["UPLOAD_FOLDER"], name)
                 files.append(("targets", (name, clip_normalize_to_jpeg_bytes(p), "image/jpeg")))
 
-            for name, _ in top:
-                p = os.path.join(app.config["UPLOAD_FOLDER"], name)
-                files.append(("targets", (name, open(p, "rb"), "image/jpeg")))
-
-            # コールドスタート考慮で長め（必要なら調整）
             resp = requests.post(HF_BATCH_URL, files=files, timeout=75)
             data = resp.json() if resp.ok else None
 
             if not data or not data.get("ok"):
-                raise RuntimeError(data.get("error") if isinstance(data, dict) else f"HF error HTTP {resp.status_code}")
+                raise RuntimeError(
+                    data.get("error") if isinstance(data, dict) else f"HF error HTTP {resp.status_code}"
+                )
 
             for r in data.get("results", []):
                 clip_map[r.get("name")] = int(r.get("clip", 0))
 
         except Exception as e:
             # HFが死んでもOpenCV結果だけで返す（UX崩れない）
-            # ここを「エラーで止める」にしたければ return error に変えてもOK
             print("HF batch failed:", e)
 
-    # 5) 合成して返却
-    out = []
+    # 5) 合成（全件 out_all を作る）
+    out_all = []
     for name, hist_score in candidates:
         hist100 = opencv_to_0_100(hist_score)
-        clip100 = int(clip_map.get(name, 0))  # TOP_K外は0のまま
+        clip100 = int(clip_map.get(name, 0))  # TOP_K外は0
         final100 = int(round(W_OPENCV * hist100 + W_CLIP * clip100))
-        out.append({
+        out_all.append({
             "name": name,
-            "hist": hist_score,     # -1..1 or 0..1
-            "hist100": hist100,     # 0..100
-            "clip": clip100,        # 0..100
-            "final100": final100    # 0..100
+            "hist": hist_score,
+            "hist100": hist100,
+            "clip": clip100,
+            "final100": final100
         })
 
-    # finalで並べ替え（CLIP反映）
-    out.sort(key=lambda x: x["final100"], reverse=True)
+    # sort（まずは final100順にしておく）
+    out_all.sort(key=lambda x: x["final100"], reverse=True)
+
+    # 6) サーバ側でも絞る（mode に応じて）
+    if mode == "opencv":
+        out_filtered = [r for r in out_all if int(r.get("hist100", 0)) >= threshold100]
+        out_filtered.sort(key=lambda x: x["hist100"], reverse=True)  # 見た目もOpenCV順
+    else:
+        out_filtered = [r for r in out_all if int(r.get("final100", 0)) >= threshold100]
+        out_filtered.sort(key=lambda x: x["final100"], reverse=True)
 
     return jsonify({
         "ok": True,
         "base": base_name,
         "threshold": threshold,
-        "results": out
+        "mode": mode,
+        "results": out_filtered,   # サーバで絞った結果（軽い）
+        "results_all": out_all     # 全件（フロントの即時トグル用）
     })
 
 
