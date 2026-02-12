@@ -369,8 +369,8 @@
         <div class="brand">
             <h1>画像検索アプリ</h1>
             <h3>Image Search App</h3>
-            <p>類似度しきい値でフィルタ、クリックでポップアップ表示</p>
-            <p>Filter by similarity threshold, click to display popup</p>
+            <p>スコアでフィルタ、クリックでポップアップ表示</p>
+            <p>Filter by score, click to display popup</p>
         </div>
         <div class="actions">
             <button class="btn" type="button" onclick="toggleTheme()">
@@ -391,14 +391,14 @@
                     <span>Select the reference image and search folder</span>
                 </div>
             </div>
-            <div class="bd">
-                {% if error %}
-                <div class="error">⚠️ {{ error }}</div>
-                {% endif %}
 
+            <div class="bd">
                 <form method="POST" enctype="multipart/form-data" id="searchForm">
-                    <input type="hidden" name="prev_base" value="{{ base }}">
+                    <input type="hidden" name="prev_base" value="{{ base or '' }}">
                     <input type="hidden" name="filter_mode" id="filter_mode" value="final">
+
+                    <!-- ★重要：FormDataに確実に入れるスコア -->
+                    <input type="hidden" name="threshold" id="thresholdHidden" value="40">
 
                     <div class="field">
                         <label>基準画像（未選択なら前回のまま）</label>
@@ -415,18 +415,20 @@
                     <div class="field">
                         <label>🎯 スコアで絞り込み (0〜100)</label>
                         <label>Filter by score (0-100)</label>
+
                         <div class="slider">
                             <input type="range"
-                            id="thRange"
-                            min="0" max="100" step="1"
-                            value="{{ ((threshold | default(0.4)) * 100) | round(0) }}"
-                            oninput="syncThreshold(this.value)">
-                        <input type="number"
-                            id="thNum"
-                            min="0" max="100" step="1"
-                            value="{{ ((threshold | default(0.4)) * 100) | round(0) }}"
-                            oninput="syncThreshold(this.value)">
+                                   id="thRange"
+                                   min="0" max="100" step="1"
+                                   value="40"
+                                   oninput="syncThreshold(this.value)">
+                            <input type="number"
+                                   id="thNum"
+                                   min="0" max="100" step="1"
+                                   value="40"
+                                   oninput="syncThreshold(this.value)">
                         </div>
+
                         <div class="hint">
                             <span>ゆるめ（結果多め）Looser</span>
                             <span>厳しめ（高精度）Stricter</span>
@@ -437,93 +439,39 @@
                             <div class="pill" onclick="bumpThreshold(-10)">−10</div>
                             <div class="pill" onclick="bumpThreshold(+5)">＋5</div>
                             <div class="pill" onclick="bumpThreshold(+10)">＋10</div>
-                            <div class="pill" onclick="setThreshold(40)">おすすめ(Recomended): 40</div>
-                            <div class="pill" onclick="setThreshold(70)">おすすめ(Recomended): 70</div>
+                            <div class="pill" onclick="setThreshold(40)">おすすめ: 40</div>
+                            <div class="pill" onclick="setThreshold(70)">おすすめ: 70</div>
                         </div>
                     </div>
 
                     <button class="primary" type="submit">検索開始<br>Start Search</button>
-                </form>
+                    </form>
+                </div>
             </div>
-        </div>
 
-        <!-- Right: Results -->
-        <div class="subgrid">
-
-            <div class="card">
-                <div class="hd">
-                    <div class="title">
-                        <b>検索結果<br>Results</b>
-                        <span>クリックで拡大 + 説明<br>Click to enlarge + Description</span>
-                    </div>
-                    <div style="display:flex; gap:8px; align-items:center;">
-                        <button class="pill" type="button" id="mode-final" onclick="setFilterMode('final')">総合で絞る</button>
-                        <button class="pill" type="button" id="mode-opencv" onclick="setFilterMode('opencv')">OpenCVで絞る</button>
-                    </div>
-                </div>
-                <div class="bd">
-
-                    <div id="resultsArea">
-                        {% if base %}
-                        <div class="baseBox">
-                            <img src="/static/uploads/{{ base }}" alt="base">
-                            <div class="baseMeta">
-                                <b>基準画像 (Reference image)</b>
-                                <span>基準画像は保持されます（再選択しなくてOK）</span>
-                                <span>The reference image will be retained (no need to reselect it)</span>
-                                <span>しきい値 (Threshold): {{ "%.2f"|format(threshold | default(0.4)) }}</span>
-                            </div>
+            <!-- Right: Results -->
+            <div class="subgrid">
+                <div class="card">
+                    <div class="hd">
+                        <div class="title">
+                            <b>検索結果<br>Results</b>
+                            <span>クリックで拡大 + 説明<br>Click to enlarge + Description</span>
                         </div>
-                        <div style="height:14px"></div>
-                            {% endif %}
+                        <div style="display:flex; gap:8px; align-items:center;">
+                            <button class="pill" type="button" id="mode-final" onclick="setFilterMode('final')">総合で絞る</button>
+                            <button class="pill" type="button" id="mode-opencv" onclick="setFilterMode('opencv')">OpenCVで絞る</button>
+                        </div>
+                    </div>
 
-                            {% if results %}
-                            <div class="resultsGrid">
-                                {% for r in results %}
-                                    {% set name = r[0] %}
-                                    {% set score = r[1] %}
-                                    {% set desc = (r[2] if (r|length > 2) else "") %}
-                                    {% set bar = ((score + 1) / 2 if score < 0 else score) %}
-                                    {% if bar < 0 %}{% set bar = 0 %}{% endif %}
-                                    {% if bar > 1 %}{% set bar = 1 %}{% endif %}
-
-                                    <div class="item"
-                                    data-name="{{ name }}"
-                                    data-score="{{ '%.6f'|format(score) }}"
-                                    onclick="openPopupFromEl(this)"
-                                    role="button" tabindex="0">
-                                        <img class="thumb" src="/static/uploads/{{ name }}" alt="result">
-                                        <div class="meta">
-                                            <div class="scoreLine">
-                                                <b>類似度 (Similarity)</b>
-                                                <span>{{ "%.3f"|format(score) }}</span>
-                                            </div>
-                                            <div class="bar"><div style="width: {{ (bar*100)|round(0) }}%;"></div></div>
-
-                                                <div class="desc">
-                                                    {% if desc %}
-                                                        {{ desc }}
-                                                    {% else %}
-                                                        クリックで詳細を表示 (Click for details)
-                                                    {% endif %}
-                                                </div>
-                                            </div>
-                                        </div>
-                                {% endfor %}
+                    <div class="bd">
+                        <div id="resultsArea">
+                            <div class="empty">
+                                <b>まだ結果がありません (No results yet)</b><br>
+                                ① 基準画像 → ② フォルダ → ③ 検索開始
                             </div>
-
-                            {% else %}
-                                <div class="empty">
-                                    <b>まだ結果がありません (No results yet)</b><br>
-                                    ① 基準画像を選ぶ (Select a reference image) → ② フォルダを選ぶ (Select a folder) → ③ 検索開始 (Start Search)<br>
-                                    もし0件なら、しきい値を少し下げてみてね (If 0 results, try lowering the threshold a bit)
-                                </div>
-                            {% endif %}
-
                         </div>
                     </div>
                 </div>
-
             </div>
 
         </div>
@@ -616,10 +564,14 @@
 
         const range = document.getElementById("thRange");
         const num = document.getElementById("thNum");
+        const hid = document.getElementById("thresholdHidden"); // ★追加
+
         if (range) range.value = val;
         if (num) num.value = val;
 
-        lastThreshold = val; // ★ここから lastThreshold は 0..100
+        if (hid) hid.value = String(val); // ★超重要：FormDataに入る値を更新
+
+        lastThreshold = val; // ★ここから lastThreshold は 0..100 にする（下で直す）
 
         if (lastAllResults && lastBaseName){
             applyFilterAndRender();
@@ -894,7 +846,7 @@
     // =============================
     let lastAllResults = null;   // サーバが返した全件（results_all）
     let lastBaseName = null;
-    let lastThreshold = 0.4;
+    let lastThreshold = 40;
 
     function setFilterMode(mode){
         const hid = document.getElementById("filter_mode");
@@ -952,7 +904,7 @@
                     <b>基準画像 (Reference image)</b>
                     <span>基準画像は保持されます（再選択しなくてOK）</span>
                     <span>The reference image will be retained (no need to reselect it)</span>
-                    <span>しきい値 (Threshold): ${Number(threshold).toFixed(2)}</span>
+                    <span>しきい値 (Threshold): ${Math.round(Number(threshold))} / 100</span>
                     <span>絞り込み: ${isOpenCV ? "OpenCV(hist100)" : "総合(final100)"} </span>
                 </div>
             </div>

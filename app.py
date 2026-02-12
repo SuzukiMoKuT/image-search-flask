@@ -7,7 +7,6 @@ import requests
 from PIL import Image, ImageOps
 import io
 
-
 # =============================
 # App / Folders
 # =============================
@@ -29,17 +28,16 @@ def allowed_file(filename: str) -> bool:
     ext = os.path.splitext(filename.lower())[1]
     return ext in ALLOWED_EXT
 
-CLIP_MAX_SIDE = 768        # 768 or 1024 推奨
-CLIP_JPEG_QUALITY = 85     # 80〜85 推奨
-CLIP_MAX_BYTES = 900_000   # 目安(0.9MB)。不要なら消してOK
+
+# -----------------------------
+# CLIP image normalize
+# -----------------------------
+CLIP_MAX_SIDE = 768
+CLIP_JPEG_QUALITY = 85
+CLIP_MAX_BYTES = 900_000
+
 
 def clip_normalize_to_jpeg_bytes(path: str) -> bytes:
-    """
-    CLIP推論用に画像を軽量化してJPEG(bytes)にする
-    - EXIF回転反映（スマホ対策）
-    - 長辺を CLIP_MAX_SIDE に収める
-    - JPEG圧縮（必要ならサイズまでqualityを落とす）
-    """
     img = Image.open(path)
     img = ImageOps.exif_transpose(img).convert("RGB")
 
@@ -52,7 +50,6 @@ def clip_normalize_to_jpeg_bytes(path: str) -> bytes:
     img.save(buf, format="JPEG", quality=CLIP_JPEG_QUALITY, optimize=True)
     data = buf.getvalue()
 
-    # 任意：まだ重い場合は quality を落として再圧縮
     if len(data) > CLIP_MAX_BYTES:
         q = 75
         while q >= 55:
@@ -65,6 +62,7 @@ def clip_normalize_to_jpeg_bytes(path: str) -> bytes:
 
     return data
 
+
 def clamp01(x: float) -> float:
     x = float(x)
     if x < 0:
@@ -73,14 +71,15 @@ def clamp01(x: float) -> float:
         return 1.0
     return x
 
+
 # =============================
 # Utils (non-CLIP scoring)
 # =============================
-def corr_to_01(c):  # -1..1 -> 0..1
+def corr_to_01(c):
     return clamp01((float(c) + 1.0) / 2.0)
 
 
-def diff_to_01(d, maxv):  # 差が小さいほど1に近い
+def diff_to_01(d, maxv):
     return clamp01(1.0 - (float(d) / float(maxv)))
 
 
@@ -173,15 +172,31 @@ def get_edge_density(img):
 # Routes
 # =============================
 HF_BATCH_URL = "https://taku1103-clip-sim-api.hf.space/clip_sim_batch"
-TOP_K = 30  # ここを20〜30推奨
+TOP_K = 30
 W_OPENCV = 0.7
 W_CLIP = 0.3
 
 
 def opencv_to_0_100(hist_score: float) -> int:
-    # compareHist(CORREL) は -1..1 になり得るので 0..1 に寄せて 0..100
-    s01 = clamp01((float(hist_score) + 1.0) / 2.0) if hist_score < 0 else clamp01(float(hist_score))
+    # compareHist(CORREL) は -1..1 → 0..1 → 0..100
+    s01 = clamp01((float(hist_score) + 1.0) / 2.0)
     return int(round(s01 * 100))
+
+
+def parse_min_score100(val: str, default100: int = 40) -> int:
+    """
+    threshold は以下どっちでも受け付ける：
+      - 0..1（昔のしきい値） → *100 して score100
+      - 0..100（スコア）     → そのまま
+    """
+    try:
+        x = float(val)
+    except Exception:
+        return int(default100)
+
+    if x <= 1.0:
+        return int(round(clamp01(x) * 100))
+    return int(max(0, min(100, round(x))))
 
 
 @app.route("/search_api", methods=["POST"])
@@ -191,32 +206,26 @@ def search_api():
       - base: file (optional)
       - prev_base: str (optional)
       - folder: files (multiple)
-      - threshold: str (0..1)
+      - threshold: str (0..100 推奨 / 0..1 も互換)
       - filter_mode: "final" or "opencv"
-    return JSON:
-      { ok, base, threshold, mode, results, results_all }
-    """
-    threshold = 0.4
 
+    return JSON:
+      { ok, base, threshold100, mode, results, results_all }
+    """
     # 1) params
     prev_base = request.form.get("prev_base") or ""
     prev_base = os.path.basename(prev_base) if prev_base else ""
-
-    try:
-        threshold = float(request.form.get("threshold", 0.4))
-    except Exception:
-        threshold = 0.4
 
     mode = request.form.get("filter_mode", "final")
     if mode not in ("final", "opencv"):
         mode = "final"
 
-    threshold100 = int(round(threshold * 100))
+    min_score100 = parse_min_score100(request.form.get("threshold", "40"), default100=40)
 
     base_file = request.files.get("base")
     folder_files = request.files.getlist("folder")
 
-    # 2) base決定（アップロード or 前回維持）
+    # 2) base決定
     if base_file and base_file.filename:
         if not allowed_file(base_file.filename):
             return jsonify({"ok": False, "error": "対応していない画像形式です😢"}), 400
@@ -236,8 +245,8 @@ def search_api():
     if base_hist is None:
         return jsonify({"ok": False, "error": "基準画像が壊れています😢"}), 400
 
-    # 3) OpenCVで候補を作る（ここは threshold の一次フィルタとして残す）
-    candidates = []
+    # 3) OpenCVスコア（ここでは *絞らない*：全件保持）
+    candidates = []  # [{"name","hist","hist100","path"}]
     for f in folder_files:
         if not f or not f.filename:
             continue
@@ -254,143 +263,86 @@ def search_api():
             continue
 
         score = float(cv2.compareHist(base_hist, hist, cv2.HISTCMP_CORREL))
-        if score >= threshold:
-            candidates.append((name, score))
+        hist100 = opencv_to_0_100(score)
+        candidates.append({"name": name, "hist": score, "hist100": hist100, "path": path})
 
-    candidates.sort(key=lambda x: x[1], reverse=True)
+    if not candidates:
+        return jsonify({
+            "ok": True,
+            "base": base_name,
+            "threshold100": min_score100,
+            "mode": mode,
+            "results": [],
+            "results_all": []
+        })
 
-    # 4) TOP_KだけCLIPへ（候補0なら即返す）
+    # 4) CLIPは OpenCV上位 TOP_K だけに投げる
+    candidates.sort(key=lambda x: x["hist100"], reverse=True)
     top = candidates[:TOP_K]
-    clip_map = {name: 0 for name, _ in top}
 
-    if top:
-        try:
-            # base と targets を multipart で一括送信
-            files = []
-            files.append(("base", ("base.jpg", clip_normalize_to_jpeg_bytes(base_path), "image/jpeg")))
+    clip_map = {c["name"]: 0 for c in top}
+    try:
+        files = []
+        files.append(("base", ("base.jpg", clip_normalize_to_jpeg_bytes(base_path), "image/jpeg")))
+        for c in top:
+            files.append(("targets", (c["name"], clip_normalize_to_jpeg_bytes(c["path"]), "image/jpeg")))
 
-            # ✅ targets は「正規化JPEG bytes」だけ送る（2重送信しない）
-            for name, _ in top:
-                p = os.path.join(app.config["UPLOAD_FOLDER"], name)
-                files.append(("targets", (name, clip_normalize_to_jpeg_bytes(p), "image/jpeg")))
+        resp = requests.post(HF_BATCH_URL, files=files, timeout=75)
+        data = resp.json() if resp.ok else None
+        if not data or not data.get("ok"):
+            raise RuntimeError(
+                data.get("error") if isinstance(data, dict) else f"HF error HTTP {resp.status_code}"
+            )
 
-            resp = requests.post(HF_BATCH_URL, files=files, timeout=75)
-            data = resp.json() if resp.ok else None
+        for r in data.get("results", []):
+            clip_map[r.get("name")] = int(r.get("clip", 0))
+    except Exception as e:
+        print("HF batch failed:", e)
 
-            if not data or not data.get("ok"):
-                raise RuntimeError(
-                    data.get("error") if isinstance(data, dict) else f"HF error HTTP {resp.status_code}"
-                )
-
-            for r in data.get("results", []):
-                clip_map[r.get("name")] = int(r.get("clip", 0))
-
-        except Exception as e:
-            # HFが死んでもOpenCV結果だけで返す（UX崩れない）
-            print("HF batch failed:", e)
-
-    # 5) 合成（全件 out_all を作る）
+    # 5) 合成：全件 out_all
     out_all = []
-    for name, hist_score in candidates:
-        hist100 = opencv_to_0_100(hist_score)
-        clip100 = int(clip_map.get(name, 0))  # TOP_K外は0
-        final100 = int(round(W_OPENCV * hist100 + W_CLIP * clip100))
+    for c in candidates:
+        clip100 = int(clip_map.get(c["name"], 0))  # TOP_K外は0
+        final100 = int(round(W_OPENCV * int(c["hist100"]) + W_CLIP * clip100))
         out_all.append({
-            "name": name,
-            "hist": hist_score,
-            "hist100": hist100,
+            "name": c["name"],
+            "hist": c["hist"],
+            "hist100": int(c["hist100"]),
             "clip": clip100,
             "final100": final100
         })
 
-    # sort（まずは final100順にしておく）
-    out_all.sort(key=lambda x: x["final100"], reverse=True)
-
-    # 6) サーバ側でも絞る（mode に応じて）
+    # 6) mode + min_score100 で絞って返す
     if mode == "opencv":
-        out_filtered = [r for r in out_all if int(r.get("hist100", 0)) >= threshold100]
-        out_filtered.sort(key=lambda x: x["hist100"], reverse=True)  # 見た目もOpenCV順
+        out_filtered = [r for r in out_all if int(r["hist100"]) >= min_score100]
+        out_filtered.sort(key=lambda x: x["hist100"], reverse=True)
     else:
-        out_filtered = [r for r in out_all if int(r.get("final100", 0)) >= threshold100]
+        out_filtered = [r for r in out_all if int(r["final100"]) >= min_score100]
         out_filtered.sort(key=lambda x: x["final100"], reverse=True)
+
+    # out_all は基本 final100順（見やすさ）
+    out_all.sort(key=lambda x: x["final100"], reverse=True)
 
     return jsonify({
         "ok": True,
         "base": base_name,
-        "threshold": threshold,
+        "threshold100": min_score100,
         "mode": mode,
-        "results": out_filtered,   # サーバで絞った結果（軽い）
-        "results_all": out_all     # 全件（フロントの即時トグル用）
+        "results": out_filtered,
+        "results_all": out_all
     })
 
 
-@app.route("/", methods=["GET", "POST"])
+@app.route("/", methods=["GET"])
 def index():
-    threshold = 0.4
-    base_name = None
-    results = []
-
-    if request.method == "POST":
-        prev_base = request.form.get("prev_base") or ""
-        prev_base = os.path.basename(prev_base) if prev_base else ""
-
-        base = request.files.get("base")
-        files = request.files.getlist("folder")
-
-        try:
-            threshold = float(request.form.get("threshold", 0.4))
-        except Exception:
-            threshold = 0.4
-
-        # base決定
-        if base and base.filename:
-            if not allowed_file(base.filename):
-                return render_template("index.html", error="対応していない画像形式です😢")
-            ext = os.path.splitext(base.filename)[1].lower()
-            base_name = str(uuid.uuid4()) + ext
-            base_path = os.path.join(app.config["UPLOAD_FOLDER"], base_name)
-            base.save(base_path)
-        elif prev_base:
-            base_name = prev_base
-            base_path = os.path.join(app.config["UPLOAD_FOLDER"], base_name)
-            if not os.path.exists(base_path):
-                return render_template("index.html", error="基準画像をもう一度選んでね📸")
-        else:
-            return render_template("index.html", error="基準画像を選んでね📸")
-
-        base_hist = get_histogram(base_path)
-        if base_hist is None:
-            return render_template("index.html", error="基準画像が壊れています😢")
-
-        # folder内を比較（ヒストグラム相関）
-        for f in files:
-            if not f or not f.filename:
-                continue
-            if not allowed_file(f.filename):
-                continue
-
-            ext = os.path.splitext(f.filename)[1].lower()
-            new_name = str(uuid.uuid4()) + ext
-            path = os.path.join(app.config["UPLOAD_FOLDER"], new_name)
-            f.save(path)
-
-            hist = get_histogram(path)
-            if hist is None:
-                continue
-
-            score = cv2.compareHist(base_hist, hist, cv2.HISTCMP_CORREL)
-            if score >= threshold:
-                results.append((new_name, float(score)))
-
-        results.sort(key=lambda x: x[1], reverse=True)
-
-    return render_template("index.html", base=base_name, results=results, threshold=threshold)
+    # 初期表示はJS検索前提なので、ここは薄くでOK
+    return render_template("index.html", base=None, results=None, threshold=40)
 
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
     """
-    ここは軽量分析のみ（CLIPは絶対に叩かない）
+    ここは軽量分析のみ（CLIPは叩かない）
     """
     data = request.json or {}
     base = data.get("base")
@@ -402,21 +354,12 @@ def analyze():
     target_path = os.path.join(app.config["UPLOAD_FOLDER"], os.path.basename(target))
 
     if not os.path.exists(base_path) or not os.path.exists(target_path):
-        return jsonify({
-            "text": f"解析対象が見つかりませんでした😢 (base_exists={os.path.exists(base_path)}, target_exists={os.path.exists(target_path)})",
-            "debug": {"base": os.path.basename(base), "target": os.path.basename(target)},
-        })
+        return jsonify({"text": "解析対象が見つかりませんでした😢"})
 
     bimg = cv2.imread(base_path)
     timg = cv2.imread(target_path)
     if bimg is None or timg is None:
         return jsonify({"text": "画像を読み込めませんでした😢"})
-    
-    if bimg is None or timg is None:
-        return jsonify({
-            "text": "画像を読み込めませんでした😢（形式が特殊/破損の可能性）",
-            "debug": {"base_path": base_path, "target_path": target_path}
-        })
 
     # 色
     bh = get_histogram(base_path)
@@ -456,7 +399,6 @@ def analyze():
         reasons.append("輪郭の情報量（構造）が近い")
     if orb_sim > 0.20:
         reasons.append("形の一致（特徴点）が多い")
-
     if not reasons:
         reasons.append("全体の特徴が近い可能性がある")
 
@@ -481,5 +423,4 @@ def analyze():
 
 
 if __name__ == "__main__":
-    # debug=True は開発だけで。Render本番は gunicorn 推奨
     app.run(host="0.0.0.0", port=5000, debug=True)
