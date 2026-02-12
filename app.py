@@ -184,18 +184,12 @@ def opencv_to_0_100(hist_score: float) -> int:
 
 
 def parse_min_score100(val: str, default100: int = 40) -> int:
-    """
-    threshold は以下どっちでも受け付ける：
-      - 0..1（昔のしきい値） → *100 して score100
-      - 0..100（スコア）     → そのまま
-    """
     try:
         x = float(val)
     except Exception:
         return int(default100)
 
-    if x <= 1.0:
-        return int(round(clamp01(x) * 100))
+    # 0..100 以外は丸めるだけ（0..1互換を捨てる）
     return int(max(0, min(100, round(x))))
 
 
@@ -220,7 +214,7 @@ def search_api():
     if mode not in ("final", "opencv"):
         mode = "final"
 
-    min_score100 = parse_min_score100(request.form.get("threshold", "40"), default100=40)
+    min_score100 = parse_min_score100(request.form.get("min_score", "40"), default100=40)
 
     base_file = request.files.get("base")
     folder_files = request.files.getlist("folder")

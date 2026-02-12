@@ -398,7 +398,7 @@
                     <input type="hidden" name="filter_mode" id="filter_mode" value="final">
 
                     <!-- ★重要：FormDataに確実に入れるスコア -->
-                    <input type="hidden" name="threshold" id="thresholdHidden" value="40">
+                    <input type="hidden" name="min_score" id="minScoreHidden" value="40">
 
                     <div class="field">
                         <label>基準画像（未選択なら前回のまま）</label>
@@ -564,12 +564,12 @@
 
         const range = document.getElementById("thRange");
         const num = document.getElementById("thNum");
-        const hid = document.getElementById("thresholdHidden"); // ★追加
+        const hid = document.getElementById("minScoreHidden");
 
         if (range) range.value = val;
         if (num) num.value = val;
 
-        if (hid) hid.value = String(val); // ★超重要：FormDataに入る値を更新
+        if (hid) hid.value = String(val);
 
         lastThreshold = val; // ★ここから lastThreshold は 0..100 にする（下で直す）
 
@@ -915,7 +915,7 @@
             area.innerHTML = baseHtml + `
                 <div class="empty">
                     <b>0件でした</b><br>
-                    しきい値を下げてみてね（Threshold: ${Number(threshold).toFixed(2)}）
+                    しきい値を下げてみてね（Threshold: ${Math.round(Number(threshold))} / 100）
                 </div>
             `;
             return;
@@ -1072,10 +1072,9 @@
     for (const [k, v] of new FormData(form).entries()){
         if (k === "base" || k === "folder") continue;
 
-        if (k === "threshold"){
-            const score = clampScore(v);           // 0..100
-            const th01 = (score / 100).toFixed(2); // 0..1
-            fd.append("threshold", th01);
+        // 新（0..100をそのまま送る）
+        if (k === "min_score"){
+            fd.append("min_score", String(clampScore(v)));
             continue;
         }
 
@@ -1127,7 +1126,7 @@
                 }
 
                 lastBaseName = data.base;
-                lastThreshold = Math.round((Number(data.threshold) || 0.4) * 100);
+                lastThreshold = clampScore(data.threshold100 ?? 40);
 
                 // ★サーバが返した全件を保持（results_all が無ければ results を使う）
                 lastAllResults = data.results_all || data.results || [];
